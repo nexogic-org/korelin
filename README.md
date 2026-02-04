@@ -61,33 +61,6 @@ cmake ..
 cmake --build .
 ```
 
-## 5. Documentation Navigation
-
-*   **Basic Syntax**
-    *   [Variables and Constants](doc/变量与常量.md)
-    *   [Keywords](doc/关键字.md)
-    *   [Conditions](doc/条件.md)
-    *   [Loops](doc/循环.md)
-    *   [Functions and Main](doc/函数与主函数.md)
-    *   [Type Conversion](doc/类型转换.md)
-*   **Data Structures and Generics**
-    *   [Arrays](doc/数组.md)
-    *   [Generics](doc/泛型.md)
-    *   [Maps](doc/Map.md)
-    *   [Structs](doc/结构体.md)
-*   **Object-Oriented Programming**
-    *   [OOP](doc/面向对象编程.md)
-    *   [Inheritance](doc/类的继承.md)
-*   **Error Handling**
-    *   [Exceptions and Handling](doc/异常与异常处理.md)
-*   **Standard Library and Tools**
-    *   [Standard Library](doc/标准库.md)
-    *   [Command Line Tools](doc/命令行.md)
-    *   [Package Management](doc/包管理.md)
-*   **Internals and Extensions**
-    *   [KVM Internals](doc/KVM原理.md)
-    *   [Bytecode Specification](doc/字节码.md)
-    *   [C/C++ API Guide](doc/c-c++API.md)
 
 ## License
 

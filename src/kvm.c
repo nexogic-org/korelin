@@ -573,7 +573,7 @@ void kvm_init(KVM* vm) {
     vm->jit = (ComeOnJIT*)malloc(sizeof(ComeOnJIT));
     if (vm->jit) {
         jit_init(vm->jit);
-        // vm->jit->enabled = false; // Disable for debugging
+        vm->jit->enabled = false; // Disable for debugging
     }
 
     vm->import_handler = NULL;

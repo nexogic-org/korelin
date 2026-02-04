@@ -176,6 +176,12 @@ static KValue load_module_file(KVM* vm, const char* name, const char* path_overr
     uint8_t* saved_ip = vm->ip;
     KTable saved_globals = vm->globals;
     KObjInstance* saved_module = vm->current_module;
+    KValue* saved_registers = vm->registers;
+    KValue* saved_stack_top = vm->stack_top;
+
+    // New register window
+    vm->registers = vm->stack_top;
+    vm->stack_top += 256; // Reserve enough space (KVM_REGISTERS_MAX is usually 256)
     
     KObjInstance* module = (KObjInstance*)malloc(sizeof(KObjInstance));
     module->header.type = OBJ_CLASS_INSTANCE;
@@ -229,6 +235,8 @@ static KValue load_module_file(KVM* vm, const char* name, const char* path_overr
     vm->ip = saved_ip;
     vm->globals = saved_globals;
     vm->current_module = saved_module;
+    vm->registers = saved_registers;
+    vm->stack_top = saved_stack_top;
     
     free(source);
     
@@ -305,15 +313,6 @@ static void parse_library_map(KVM* vm, const char* json_path, const char* field_
         v_val.as.str = val;
         
         table_set(&vm->lib_paths, key, v_val);
-        
-        // Preload/Override module
-        // printf("DEBUG: Preloading module '%s' from '%s'\n", key, val);
-        KValue mod = load_module_file(vm, key, val);
-        if (mod.type != VAL_NULL) {
-            table_set(&vm->modules, key, mod);
-        } else {
-            printf("Warning: Failed to preload module '%s' from '%s'\n", key, val);
-        }
         
         free(key); 
         
@@ -503,8 +502,8 @@ static void run_file(const char* path, bool compile_only, const char* lib_arg) {
     }
     
     // JIT cleanup handled in kvm_free
-    kvm_free(&vm);
     free_chunk(&chunk);
+    kvm_free(&vm);
     free(source);
 }
 
