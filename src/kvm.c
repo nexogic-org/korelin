@@ -308,10 +308,62 @@ KValue kvm_pop(KVM* vm) {
 #define REG_AS_INT(idx) (vm->registers[idx].as.integer)
 #define REG_AS_DOUBLE(idx) (vm->registers[idx].as.double_prec)
 
+static void print_runtime_error_context(KVM* vm) {
+    // printf("Debug: print_runtime_error_context called. vm=%p\n", vm);
+    if (!vm || !vm->chunk || !vm->chunk->lines || !vm->chunk->code) {
+        // printf("Debug: Invalid vm state\n");
+        return;
+    }
+    
+    // Calculate offset. 
+    size_t offset = 0;
+    if (vm->ip > vm->chunk->code) {
+        offset = vm->ip - vm->chunk->code - 1;
+    }
+    
+    if (offset >= vm->chunk->count) offset = vm->chunk->count > 0 ? vm->chunk->count - 1 : 0;
+    
+    int line = vm->chunk->lines[offset];
+    // printf("Debug: offset=%zu, line=%d\n", offset, line);
+    if (line == 0) return; // Unknown line
+    
+    const char* filename = (vm->chunk->filename) ? vm->chunk->filename : "script";
+    // printf("Debug: filename=%s\n", filename);
+    
+    printf("   %s:%d\n", filename, line);
+    
+    if (vm->chunk->filename) {
+        FILE* file = fopen(vm->chunk->filename, "r");
+        if (file) {
+            char buffer[1024];
+            int current_line = 1;
+            while (fgets(buffer, sizeof(buffer), file)) {
+                // Remove trailing newline chars including \r
+                size_t len = strlen(buffer);
+                while (len > 0 && (buffer[len-1] == '\n' || buffer[len-1] == '\r')) {
+                    buffer[--len] = '\0';
+                }
+
+                if (current_line == line) {
+                    printf("   %d | %s\n", line, buffer);
+                    printf("     | ^\n\n");
+                    break;
+                }
+                current_line++;
+            }
+            fclose(file);
+        } else {
+            // printf("Debug: Failed to open file\n");
+        }
+    }
+}
+
 #define RUNTIME_ERROR(msg) \
     { \
+        /* printf("Debug: RUNTIME_ERROR triggered: %s\n", msg); */ \
         if (!throw_runtime_error_obj(vm, "RuntimeError", msg)) { \
-            printf("Runtime Error: %s\n", msg); \
+            printf("\n[RuntimeError] %s\n", msg); \
+            print_runtime_error_context(vm); \
             vm->had_error = true; \
             return 1; \
         } \

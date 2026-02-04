@@ -33,6 +33,7 @@ const char* get_error_name(KorelinErrorType type) {
 static bool is_keyword(KorelinToken type);
 static void advance_token(Parser* parser);
 static KastStatement* parse_statement(Parser* parser);
+static void synchronize(Parser* parser);
 static KastStatement* parse_var_declaration(Parser* parser);
 static KastBlock* parse_block(Parser* parser); // 新增
 static KastStatement* parse_try_catch(Parser* parser);
@@ -103,7 +104,12 @@ static const char* get_suggestion(const char* wrong_word) {
 
 static void parser_error(Parser* parser, KorelinErrorType type, const char* format, ...) {
     if (parser->panic_mode) return; // Already in panic mode
-    parser->panic_mode = true;
+    
+    // Don't panic for missing semicolon, to allow reporting subsequent errors
+    if (type != KORELIN_ERROR_MISSING_SEMICOLON) {
+        parser->panic_mode = true;
+    }
+
     parser->has_error = true;
     parser->error_type = type;
 
@@ -737,23 +743,14 @@ static KastBlock* parse_block(Parser* parser) {
                 block->statements = (KastStatement**)realloc(block->statements, capacity * sizeof(KastStatement*));
             }
             block->statements[block->statement_count++] = stmt;
-        } else {
-             // 塊內語句解析失敗，簡單的同步邏輯
-             if (parser->panic_mode) {
-                while (!check_token(parser, KORELIN_TOKEN_SEMICOLON) && 
-                       !check_token(parser, KORELIN_TOKEN_RBRACE) && 
-                       !check_token(parser, KORELIN_TOKEN_EOF)) {
-                    advance_token(parser);
-                }
-                if (check_token(parser, KORELIN_TOKEN_SEMICOLON)) {
-                    advance_token(parser);
-                }
-                parser->panic_mode = false;
-            }
+        } 
+        
+        if (parser->panic_mode) {
+            synchronize(parser);
         }
     }
 
-    consume(parser, KORELIN_TOKEN_RBRACE, "代码块Expected '}'");
+    consume(parser, KORELIN_TOKEN_RBRACE, "Block expects '}'");
     if (parser->panic_mode) {
         // 這裏需要釋放已解析的語句
         for (size_t i = 0; i < block->statement_count; i++) {
@@ -1769,6 +1766,31 @@ static KastStatement* parse_import_statement(Parser* parser) {
     import_node->is_wildcard = false;
     
     return (KastStatement*)import_node;
+}
+
+static void synchronize(Parser* parser) {
+    parser->panic_mode = false;
+
+    while (parser->current_token.type != KORELIN_TOKEN_EOF) {
+        if (parser->previous_token.type == KORELIN_TOKEN_SEMICOLON) return;
+
+        switch (parser->current_token.type) {
+            case KORELIN_TOKEN_CLASS:
+            case KORELIN_TOKEN_FUNCTION:
+            case KORELIN_TOKEN_VAR:
+            case KORELIN_TOKEN_LET:
+            case KORELIN_TOKEN_FOR:
+            case KORELIN_TOKEN_IF:
+            case KORELIN_TOKEN_WHILE:
+            case KORELIN_TOKEN_RETURN:
+            case KORELIN_TOKEN_IMPORT:
+                return;
+            default:
+                ;
+        }
+
+        advance_token(parser);
+    }
 }
 
 static KastStatement* parse_statement(Parser* parser) {

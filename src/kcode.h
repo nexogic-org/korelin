@@ -165,6 +165,9 @@ typedef struct {
     
     // JIT Cache
     void* jit_code; // 指向編譯後的機器碼
+    
+    // Debug info
+    char* filename;
 } KBytecodeChunk;
 
 // 編譯器/生成器狀態

@@ -53,11 +53,13 @@ void init_chunk(KBytecodeChunk* chunk) {
     chunk->string_table = NULL;
     chunk->string_count = 0;
     chunk->lines = NULL;
+    chunk->filename = NULL;
 }
 
 void free_chunk(KBytecodeChunk* chunk) {
     free(chunk->code);
     free(chunk->lines);
+    if (chunk->filename) free(chunk->filename);
     for (size_t i = 0; i < chunk->string_count; i++) {
         free(chunk->string_table[i]);
     }

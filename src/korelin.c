@@ -418,6 +418,7 @@ static void run_file(const char* path, bool compile_only, const char* lib_arg) {
     // printf("Compiling...\n"); fflush(stdout);
     KBytecodeChunk chunk;
     init_chunk(&chunk);
+    chunk.filename = strdup(path);
     
     // printf("Compiling Program...\n"); fflush(stdout);
     if (compile_ast(program, &chunk) != 0) {
