@@ -1,0 +1,7 @@
+.trae/
+.idea/
+bin/korelin.exe
+build/
+CMakeFiles/
+cmake-build-debug/
+doc/
