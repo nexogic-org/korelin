@@ -5,3 +5,5 @@ build/
 CMakeFiles/
 cmake-build-debug/
 doc/
+release/
+releases/
