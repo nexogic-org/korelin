@@ -1,7 +1,7 @@
 # Nexogic Korelin
 
 <div align="center">
-  <img src="doc/logo.png" alt="Korelin Logo" width="128" height="128" />
+  <img src="logo.png" alt="Korelin Logo" width="128" height="128" />
   <br/>
   <h3>Nexogic Korelin Programming Language</h3>
 </div>
