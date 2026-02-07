@@ -178,11 +178,6 @@ void KLibAddMethod(const char* class_name, const char* method_name, void* func) 
     
     // Create Native Function
     KObjNative* native = (KObjNative*)kgc_alloc(g_current_vm->gc, sizeof(KObjNative), OBJ_NATIVE);
-    native->header.type = OBJ_NATIVE;
-    native->header.marked = false;
-    native->header.next = g_current_vm->objects;
-    native->header.size = sizeof(KObjNative);
-    g_current_vm->objects = (KObjHeader*)native;
     
     native->function = (NativeFunc)func;
     native->name = strdup(method_name);

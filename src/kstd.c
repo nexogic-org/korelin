@@ -2119,6 +2119,7 @@ static void register_exception(const char* name) {
 
 static void register_exception_classes() {
     register_exception("Error");
+    register_exception("NameDefineError");
     register_exception("DivisionByZeroError");
     register_exception("NilReferenceError");
     register_exception("IndexOutOfBoundsError");

@@ -17,6 +17,33 @@
 // Forward Declarations
 static bool call_value(KVM* vm, KValue callee, int arg_count, int return_reg);
 static bool call(KVM* vm, KObjFunction* function, int arg_count, int return_reg);
+static bool throw_runtime_error_obj(KVM* vm, const char* type, const char* msg);
+static void print_runtime_error_context(KVM* vm);
+
+
+// Moved macros to top
+#define RUNTIME_ERROR(msg) \
+    { \
+        /* printf("Debug: RUNTIME_ERROR triggered: %s\n", msg); */ \
+        if (!throw_runtime_error_obj(vm, "RuntimeError", msg)) { \
+            printf("\n[RuntimeError] %s\n", msg); \
+            print_runtime_error_context(vm); \
+            vm->had_error = true; \
+            return 1; \
+        } \
+        break; \
+    }
+
+#define THROW_ERROR(type, msg) \
+    { \
+        if (!throw_runtime_error_obj(vm, type, msg)) { \
+            printf("Runtime Error (%s): %s\n", type, msg); \
+            vm->had_error = true; \
+            return 1; \
+        } \
+        break; \
+    }
+
 
 // --- Table Implementation ---
 void init_table(KTable* table) {
@@ -142,9 +169,14 @@ static bool call(KVM* vm, KObjFunction* function, int arg_count, int return_reg)
     }
 
     if (arg_count != function->arity) {
-        printf("Runtime Error: Expected %d arguments but got %d.\n", function->arity, arg_count);
-        vm->had_error = true;
-        return false;
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Expected %d arguments but got %d", function->arity, arg_count);
+        if (!throw_runtime_error_obj(vm, "IllegalArgumentError", msg)) {
+            printf("Runtime Error (IllegalArgumentError): %s\n", msg);
+            vm->had_error = true;
+            return false;
+        }
+        return true;
     }
 
     if (vm->frame_count >= KVM_MAX_FRAMES) {
@@ -366,27 +398,7 @@ static void print_runtime_error_context(KVM* vm) {
     }
 }
 
-#define RUNTIME_ERROR(msg) \
-    { \
-        /* printf("Debug: RUNTIME_ERROR triggered: %s\n", msg); */ \
-        if (!throw_runtime_error_obj(vm, "RuntimeError", msg)) { \
-            printf("\n[RuntimeError] %s\n", msg); \
-            print_runtime_error_context(vm); \
-            vm->had_error = true; \
-            return 1; \
-        } \
-        break; \
-    }
 
-#define THROW_ERROR(type, msg) \
-    { \
-        if (!throw_runtime_error_obj(vm, type, msg)) { \
-            printf("Runtime Error (%s): %s\n", type, msg); \
-            vm->had_error = true; \
-            return 1; \
-        } \
-        break; \
-    }
 
 #define BINARY_OP_INT(op) \
     do { \
@@ -395,7 +407,7 @@ static void print_runtime_error_context(KVM* vm) {
         uint8_t rb = READ_REG_IDX(); \
         if (REG(ra).type != VAL_INT || REG(rb).type != VAL_INT) { \
             printf("Type Error: Ra=%d, Rb=%d\n", REG(ra).type, REG(rb).type); \
-            RUNTIME_ERROR("Operands must be integers"); \
+            THROW_ERROR("TypeMismatchError", "Operands must be integers"); \
         } \
         REG(rd).type = VAL_INT; \
         REG(rd).as.integer = REG_AS_INT(ra) op REG_AS_INT(rb); \
@@ -419,7 +431,7 @@ static void print_runtime_error_context(KVM* vm) {
             REG(rd).as.double_prec = da op db; \
         } else { \
             printf("Type Error: Ra=%d, Rb=%d\n", va.type, vb.type); \
-            RUNTIME_ERROR("Operands must be numbers"); \
+            THROW_ERROR("TypeMismatchError", "Operands must be numbers"); \
         } \
     } while(0)
 
@@ -769,7 +781,7 @@ int kvm_run(KVM* vm) {
                     REG(rd).as.integer = va.as.integer + vb.as.integer;
                 } else {
                     printf("Type Error: Ra=%d, Rb=%d\n", va.type, vb.type);
-                    RUNTIME_ERROR("Operands must be numbers or strings");
+                    THROW_ERROR("TypeMismatchError", "Operands must be numbers or strings");
                 }
                 break;
             }
@@ -794,7 +806,7 @@ int kvm_run(KVM* vm) {
                     REG(rd).type = VAL_DOUBLE;
                     REG(rd).as.double_prec = da / db;
                 } else {
-                    RUNTIME_ERROR("Operands must be numbers");
+                    THROW_ERROR("TypeMismatchError", "Operands must be numbers");
                 }
                 break;
             }
@@ -1011,7 +1023,7 @@ int kvm_run(KVM* vm) {
                     REG(rd) = val;
                 } else {
                     printf("Undefined global: %s\n", key);
-                    RUNTIME_ERROR("Undefined global variable");
+                    THROW_ERROR("NameDefineError", "Undefined global variable");
                 }
                 break;
             }
@@ -1242,8 +1254,7 @@ int kvm_run(KVM* vm) {
                 
                 if (!resolve_dotted_name(vm, type_name, &target_val)) {
                      printf("Runtime Error: Undefined type or function '%s'\n", type_name);
-                     vm->had_error = true;
-                     return 1;
+                     THROW_ERROR("NameDefineError", "Undefined type or function");
                 }
                 
                 if (target_val.type == VAL_OBJ && ((KObj*)target_val.as.obj)->header.type == OBJ_CLASS) {
@@ -1324,7 +1335,7 @@ int kvm_run(KVM* vm) {
                 uint8_t rs = READ_REG_IDX();
                 uint16_t type_id = READ_IMM16();
                 
-                if (REG(rs).type != VAL_INT) RUNTIME_ERROR("Array size must be integer");
+                if (REG(rs).type != VAL_INT) THROW_ERROR("TypeMismatchError", "Array size must be integer");
                 int size = (int)REG_AS_INT(rs);
                 if (size < 0) RUNTIME_ERROR("Negative array size");
                 
@@ -1387,11 +1398,12 @@ int kvm_run(KVM* vm) {
                 uint8_t ra = READ_REG_IDX();
                 uint8_t rb = READ_REG_IDX();
                 
-                if (REG(ra).type != VAL_OBJ) RUNTIME_ERROR("Expected array");
+                if (REG(ra).type == VAL_NULL) THROW_ERROR("NilReferenceError", "Expected array");
+                if (REG(ra).type != VAL_OBJ) THROW_ERROR("TypeMismatchError", "Expected array");
                 KObjArray* arr = (KObjArray*)REG(ra).as.obj;
-                if (!arr || arr->header.type != OBJ_ARRAY) RUNTIME_ERROR("Expected array object");
+                if (!arr || arr->header.type != OBJ_ARRAY) THROW_ERROR("TypeMismatchError", "Expected array object");
                 
-                if (REG(rb).type != VAL_INT) RUNTIME_ERROR("Index must be integer");
+                if (REG(rb).type != VAL_INT) THROW_ERROR("TypeMismatchError", "Index must be integer");
                 int index = (int)REG_AS_INT(rb);
                 if (index < 0 || index >= arr->length) THROW_ERROR("IndexOutOfBoundsError", "Index out of bounds");
                 
@@ -1404,11 +1416,12 @@ int kvm_run(KVM* vm) {
                 uint8_t rb = READ_REG_IDX();
                 uint8_t rc = READ_REG_IDX();
                 
-                if (REG(ra).type != VAL_OBJ) RUNTIME_ERROR("Expected array");
+                if (REG(ra).type == VAL_NULL) THROW_ERROR("NilReferenceError", "Expected array");
+                if (REG(ra).type != VAL_OBJ) THROW_ERROR("TypeMismatchError", "Expected array");
                 KObjArray* arr = (KObjArray*)REG(ra).as.obj;
-                if (!arr || arr->header.type != OBJ_ARRAY) RUNTIME_ERROR("Expected array object");
+                if (!arr || arr->header.type != OBJ_ARRAY) THROW_ERROR("TypeMismatchError", "Expected array object");
                 
-                if (REG(rb).type != VAL_INT) RUNTIME_ERROR("Index must be integer");
+                if (REG(rb).type != VAL_INT) THROW_ERROR("TypeMismatchError", "Index must be integer");
                 int index = (int)REG_AS_INT(rb);
                 if (index < 0 || index >= arr->length) THROW_ERROR("IndexOutOfBoundsError", "Index out of bounds");
                 
@@ -1421,9 +1434,10 @@ int kvm_run(KVM* vm) {
                 uint8_t ra = READ_REG_IDX();
                 READ_BYTE(); // padding
                 
-                if (REG(ra).type != VAL_OBJ) RUNTIME_ERROR("Expected array");
+                if (REG(ra).type == VAL_NULL) THROW_ERROR("NilReferenceError", "Expected array");
+                if (REG(ra).type != VAL_OBJ) THROW_ERROR("TypeMismatchError", "Expected array");
                 KObjArray* arr = (KObjArray*)REG(ra).as.obj;
-                if (!arr || arr->header.type != OBJ_ARRAY) RUNTIME_ERROR("Expected array object");
+                if (!arr || arr->header.type != OBJ_ARRAY) THROW_ERROR("TypeMismatchError", "Expected array object");
                 
                 REG(rd).type = VAL_INT;
                 REG(rd).as.integer = arr->length;
@@ -1435,8 +1449,11 @@ int kvm_run(KVM* vm) {
                 uint8_t ra = READ_REG_IDX(); // Object
                 uint16_t id = READ_IMM16(); // String ID
                 
+                if (REG(ra).type == VAL_NULL) {
+                    THROW_ERROR("NilReferenceError", "GETF target is nil");
+                }
                 if (REG(ra).type != VAL_OBJ) {
-                    RUNTIME_ERROR("GETF target must be object");
+                    THROW_ERROR("TypeMismatchError", "GETF target must be object");
                 }
                 
                 char* key = vm->chunk->string_table[id];
@@ -1549,17 +1566,17 @@ int kvm_run(KVM* vm) {
                                      res.as.obj = bound;
                                      REG(rd) = res;
                                  } else {
-                                     RUNTIME_ERROR("Method is not a function");
+                                     THROW_ERROR("TypeMismatchError", "Method is not a function");
                                  }
                              } else {
-                                 RUNTIME_ERROR("Undefined property/method on Array");
+                                 THROW_ERROR("NameDefineError", "Undefined property/method on Array");
                              }
                         } else {
-                            RUNTIME_ERROR("Arrays only have 'length' property (Array class not found)");
+                            THROW_ERROR("NameDefineError", "Arrays only have 'length' property (Array class not found)");
                         }
                     }
                 } else {
-                     RUNTIME_ERROR("GETF not supported on this type");
+                     THROW_ERROR("TypeMismatchError", "GETF not supported on this type");
                 }
                 break;
             }
@@ -1569,8 +1586,11 @@ int kvm_run(KVM* vm) {
                 uint8_t rb = READ_REG_IDX(); // Value
                 uint16_t id = READ_IMM16(); // String ID
                 
+                if (REG(ra).type == VAL_NULL) {
+                    THROW_ERROR("NilReferenceError", "PUTF target is nil");
+                }
                 if (REG(ra).type != VAL_OBJ) {
-                    RUNTIME_ERROR("PUTF target must be object");
+                    THROW_ERROR("TypeMismatchError", "PUTF target must be object");
                 }
                 
                 char* key = vm->chunk->string_table[id];
@@ -1580,7 +1600,7 @@ int kvm_run(KVM* vm) {
                     KObjInstance* inst = (KObjInstance*)obj;
                     table_set(&inst->fields, key, REG(rb));
                 } else {
-                    RUNTIME_ERROR("PUTF not supported on this type");
+                    THROW_ERROR("TypeMismatchError", "PUTF not supported on this type");
                 }
                 break;
             }
@@ -1710,7 +1730,8 @@ int kvm_run(KVM* vm) {
                 uint16_t method_id = READ_IMM16();
                 uint8_t arg_count = READ_BYTE();
                 
-                if (REG(ra).type != VAL_OBJ) RUNTIME_ERROR("INVOKE target must be object");
+                if (REG(ra).type == VAL_NULL) THROW_ERROR("NilReferenceError", "INVOKE target is nil");
+                if (REG(ra).type != VAL_OBJ) THROW_ERROR("TypeMismatchError", "INVOKE target must be object");
                 KObj* obj = (KObj*)REG(ra).as.obj;
                 char* method_name = vm->chunk->string_table[method_id];
                 
