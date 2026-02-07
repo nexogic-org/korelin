@@ -1,9 +1,0 @@
-import os;
-
-int main() {
-    var str1 = "Hello";
-    var str2 = "World";
-    var combined = str1 + " " + str2;
-    os.println(combined);
-    return 0;
-}

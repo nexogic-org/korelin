@@ -1528,14 +1528,9 @@ int kvm_run(KVM* vm) {
                              KValue val;
                              if (table_get(&klass->methods, key, &val)) {
                                  // Found method, bind it
-                                 KObjBoundMethod* bound = (KObjBoundMethod*)malloc(sizeof(KObjBoundMethod));
-                                 bound->header.type = OBJ_BOUND_METHOD;
-                                 bound->header.marked = false;
-                                 bound->header.next = vm->objects;
-                                 bound->header.size = sizeof(KObjBoundMethod);
-                                 vm->objects = (KObjHeader*)bound;
-                                 
-                                 bound->receiver = REG(ra); // The array object
+                                KObjBoundMethod* bound = (KObjBoundMethod*)kgc_alloc(vm->gc, sizeof(KObjBoundMethod), OBJ_BOUND_METHOD);
+                                
+                                bound->receiver = REG(ra); // The array object
                                  
                                  // Ensure val is a function (Native or Script)
                                  if (val.type == VAL_OBJ && 
