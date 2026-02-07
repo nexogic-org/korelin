@@ -1570,6 +1570,40 @@ static KastStatement* parse_for_statement(Parser* parser) {
     return (KastStatement*)node;
 }
 
+// --- While 循环解析 ---
+static KastStatement* parse_while_statement(Parser* parser) {
+    consume(parser, KORELIN_TOKEN_WHILE, "Expected 'while'");
+    consume(parser, KORELIN_TOKEN_LPAREN, "Expected '('");
+    KastNode* condition = parse_expression(parser);
+    consume(parser, KORELIN_TOKEN_RPAREN, "Expected ')'");
+    
+    KastStatement* body = parse_statement(parser);
+    
+    KastWhile* node = (KastWhile*)malloc(sizeof(KastWhile));
+    node->base.type = KAST_NODE_WHILE;
+    node->condition = condition;
+    node->body = body;
+    return (KastStatement*)node;
+}
+
+// --- Do-While 循环解析 ---
+static KastStatement* parse_do_while_statement(Parser* parser) {
+    consume(parser, KORELIN_TOKEN_DO, "Expected 'do'");
+    KastStatement* body = parse_statement(parser);
+    
+    consume(parser, KORELIN_TOKEN_WHILE, "Expected 'while'");
+    consume(parser, KORELIN_TOKEN_LPAREN, "Expected '('");
+    KastNode* condition = parse_expression(parser);
+    consume(parser, KORELIN_TOKEN_RPAREN, "Expected ')'");
+    consume(parser, KORELIN_TOKEN_SEMICOLON, "Expected ';'");
+    
+    KastDoWhile* node = (KastDoWhile*)malloc(sizeof(KastDoWhile));
+    node->base.type = KAST_NODE_DO_WHILE;
+    node->body = body;
+    node->condition = condition;
+    return (KastStatement*)node;
+}
+
 // --- Return 语句解析 ---
 static KastStatement* parse_return_statement(Parser* parser) {
     consume(parser, KORELIN_TOKEN_RETURN, "Expected 'return'");
@@ -1833,6 +1867,14 @@ static KastStatement* parse_statement(Parser* parser) {
 
     if (check_token(parser, KORELIN_TOKEN_FOR)) {
         return parse_for_statement(parser);
+    }
+
+    if (check_token(parser, KORELIN_TOKEN_WHILE)) {
+        return parse_while_statement(parser);
+    }
+
+    if (check_token(parser, KORELIN_TOKEN_DO)) {
+        return parse_do_while_statement(parser);
     }
 
     if (check_token(parser, KORELIN_TOKEN_RETURN)) {
@@ -2312,6 +2354,18 @@ case KAST_NODE_FOR: {
             if (stmt->init) free_ast_node((KastNode*)stmt->init);
             if (stmt->condition) free_ast_node(stmt->condition);
             if (stmt->increment) free_ast_node(stmt->increment);
+            if (stmt->body) free_ast_node((KastNode*)stmt->body);
+            break;
+        }
+        case KAST_NODE_WHILE: {
+            KastWhile* stmt = (KastWhile*)node;
+            if (stmt->condition) free_ast_node(stmt->condition);
+            if (stmt->body) free_ast_node((KastNode*)stmt->body);
+            break;
+        }
+        case KAST_NODE_DO_WHILE: {
+            KastDoWhile* stmt = (KastDoWhile*)node;
+            if (stmt->condition) free_ast_node(stmt->condition);
             if (stmt->body) free_ast_node((KastNode*)stmt->body);
             break;
         }

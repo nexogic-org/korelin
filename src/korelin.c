@@ -332,6 +332,12 @@ KValue import_module_handler(KVM* vm, const char* name) {
         return mod_val;
     }
 
+    // Check globals (for built-in libs like math, json)
+    if (table_get(&vm->globals, name, &mod_val)) {
+        // Only return if it's an object (likely a module/class instance or class)
+        if (mod_val.type == VAL_OBJ) return mod_val;
+    }
+
     // NEW: Check Library Map
     if (table_get(&vm->lib_paths, name, &mod_val)) {
         if (mod_val.type == VAL_STRING) {

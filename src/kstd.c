@@ -1568,7 +1568,9 @@ unsigned __stdcall thread_proc(void* arg) {
     // Register standard libraries for this thread's VM
     kstd_register();
     
-    // Copy globals from parent VM (shallow copy)
+    // Global copying removed to prevent race conditions and GC crashes.
+    // Threads should be isolated and communicate via arguments or thread-safe mechanisms.
+    /*
     if (args->parent_globals && args->parent_globals->entries) {
         for (int i = 0; i < args->parent_globals->capacity; i++) {
             KTableEntry* entry = &args->parent_globals->entries[i];
@@ -1577,6 +1579,7 @@ unsigned __stdcall thread_proc(void* arg) {
             }
         }
     }
+    */
     
     // Copy bytecode chunk but ensure we don't double free it
     vm->chunk = args->func->chunk;
