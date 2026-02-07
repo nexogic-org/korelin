@@ -162,14 +162,41 @@ static void blacken_object(KGC* gc, KObjHeader* obj) {
         case OBJ_STRING:
             // 字符串不引用其他對象
             break;
-        case OBJ_CLASS_INSTANCE:
-            // TODO: 遍歷實例的字段 (Fields)
-            // KInstance* instance = (KInstance*)(obj + 1);
-            // for (int i=0; i < instance->field_count; i++) kgc_mark_value(gc, instance->fields[i]);
+        case OBJ_CLASS_INSTANCE: {
+            KObjInstance* instance = (KObjInstance*)obj;
+            // Mark fields table
+            for (int i = 0; i < instance->fields.capacity; i++) {
+                if (instance->fields.entries[i].key != NULL) {
+                    kgc_mark_value(gc, instance->fields.entries[i].value);
+                }
+            }
+            // Mark class reference
+            if (instance->klass) {
+                kgc_mark_obj(gc, (KObjHeader*)instance->klass);
+            }
             break;
-        case OBJ_ARRAY:
-            // TODO: 遍歷數組元素
+        }
+        case OBJ_ARRAY: {
+            KObjArray* array = (KObjArray*)obj;
+            for (int i = 0; i < array->length; i++) {
+                kgc_mark_value(gc, array->elements[i]);
+            }
             break;
+        }
+        case OBJ_CLASS: {
+             KObjClass* klass = (KObjClass*)obj;
+             // Mark methods
+             for (int i = 0; i < klass->methods.capacity; i++) {
+                 if (klass->methods.entries[i].key != NULL) {
+                     kgc_mark_value(gc, klass->methods.entries[i].value);
+                 }
+             }
+             // Mark parent
+             if (klass->parent) {
+                 kgc_mark_obj(gc, (KObjHeader*)klass->parent);
+             }
+             break;
+        }
         default:
             break;
     }

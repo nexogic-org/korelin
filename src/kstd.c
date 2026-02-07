@@ -256,9 +256,21 @@ static void std_os_open() {
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
     
+    if (fsize < 0 || fsize > 100 * 1024 * 1024) { 
+        fclose(f); 
+        KReturnString(""); 
+        return; 
+    }
+    
     char* buf = (char*)malloc(fsize + 1);
-    fread(buf, 1, fsize, f);
-    buf[fsize] = '\0';
+    if (!buf) {
+        fclose(f);
+        KReturnString("");
+        return;
+    }
+    
+    size_t read = fread(buf, 1, fsize, f);
+    buf[read] = '\0';
     fclose(f);
     
     KReturnString(buf);
@@ -491,12 +503,26 @@ static void std_net_http_get() {
     char buffer[4096];
     DWORD bytesRead;
     char* result = (char*)malloc(1);
+    if (!result) {
+        InternetCloseHandle(hUrl);
+        InternetCloseHandle(hInternet);
+        KReturnString("");
+        return;
+    }
     result[0] = '\0';
     int totalLen = 0;
     
     while (InternetReadFile(hUrl, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0) {
         buffer[bytesRead] = '\0';
-        result = (char*)realloc(result, totalLen + bytesRead + 1);
+        char* new_res = (char*)realloc(result, totalLen + bytesRead + 1);
+        if (!new_res) {
+            free(result);
+            InternetCloseHandle(hUrl);
+            InternetCloseHandle(hInternet);
+            KReturnString("");
+            return;
+        }
+        result = new_res;
         memcpy(result + totalLen, buffer, bytesRead);
         totalLen += bytesRead;
         result[totalLen] = '\0';
@@ -848,15 +874,18 @@ static void std_net_getIP() {
     KString domain = KGetArgString(start);
     if (!domain) { KReturnString(""); return; }
     
-    struct hostent* host = gethostbyname(domain);
-    if (host) {
-        struct in_addr** addr_list = (struct in_addr**)host->h_addr_list;
-        if (addr_list[0]) {
-            KReturnString(inet_ntoa(*addr_list[0]));
-            return;
-        }
+    struct addrinfo hints = {0}, *res = NULL;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    
+    if (getaddrinfo(domain, NULL, &hints, &res) == 0) {
+        struct sockaddr_in* ipv4 = (struct sockaddr_in*)res->ai_addr;
+        char* ip = inet_ntoa(ipv4->sin_addr);
+        KReturnString(ip);
+        freeaddrinfo(res);
+    } else {
+        KReturnString("");
     }
-    KReturnString("");
 }
 
 // -------------------------------------------------------------------------
@@ -1592,9 +1621,21 @@ unsigned __stdcall thread_proc(void* arg) {
     
     // Pass Argument: Push to local register 0
     if (args->has_arg) {
-        // In KVM, registers are just a window on the stack/register file
-        // For a new function call at base level, R0 is registers[0]
-        vm->registers[0] = args->arg;
+        KValue val = args->arg;
+        // Deep copy string/objects to new VM heap to prevent GC race conditions
+        if (val.type == VAL_OBJ) {
+            KObj* obj = (KObj*)val.as.obj;
+            if (obj->header.type == OBJ_STRING) {
+                KObjString* src = (KObjString*)obj;
+                KObjString* dst = alloc_string(vm, src->chars, src->length);
+                val.as.obj = (KObj*)dst;
+            } else {
+                // Other objects are not safe to share
+                val.type = VAL_NULL;
+                printf("Warning: Passing complex objects to threads is unsafe. Argument set to null.\n");
+            }
+        }
+        vm->registers[0] = val;
     }
     
     vm->ip = frame->ip;

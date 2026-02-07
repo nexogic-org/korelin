@@ -108,6 +108,7 @@ typedef enum {
     KORELIN_TOKEN_EXTENDS,   // extends - 继承
     KORELIN_TOKEN_SUPER,     // super - 父类引用
     KORELIN_TOKEN_NEW,       // new - 创建对象
+    KORELIN_TOKEN_THROW,     // throw - 抛出异常
 } KorelinToken;
 
 /**
