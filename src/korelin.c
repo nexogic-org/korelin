@@ -179,8 +179,32 @@ static KValue load_module_file(KVM* vm, const char* name, const char* path_overr
     KValue* saved_registers = vm->registers;
     KValue* saved_stack_top = vm->stack_top;
 
+    // Backup Frames to allow re-entrant execution (recursion)
+    CallFrame saved_frames[KVM_MAX_FRAMES];
+    int saved_frame_count = vm->frame_count;
+    if (saved_frame_count > 0) {
+        memcpy(saved_frames, vm->frames, saved_frame_count * sizeof(CallFrame));
+    }
+    vm->frame_count = 0; // Reset for inner execution
+
     // New register window
     vm->registers = vm->stack_top;
+    
+    // Safety Check: Stack Overflow
+    if (vm->stack_top + 256 >= vm->stack + KVM_STACK_SIZE) {
+         printf("Runtime Error: Stack overflow during module loading '%s'.\n", name);
+         
+         vm->chunk = saved_chunk;
+         vm->ip = saved_ip;
+         vm->globals = saved_globals;
+         vm->current_module = saved_module;
+         vm->registers = saved_registers;
+         vm->stack_top = saved_stack_top;
+         
+         free_chunk(chunk); free(chunk); free(source);
+         return (KValue){VAL_NULL};
+    }
+
     vm->stack_top += 256; // Reserve enough space (KVM_REGISTERS_MAX is usually 256)
     
     KObjInstance* module = (KObjInstance*)malloc(sizeof(KObjInstance));
@@ -197,6 +221,12 @@ static KValue load_module_file(KVM* vm, const char* name, const char* path_overr
     
     kvm_interpret(vm, chunk);
     
+    // Restore Frames
+    vm->frame_count = saved_frame_count;
+    if (saved_frame_count > 0) {
+        memcpy(vm->frames, saved_frames, saved_frame_count * sizeof(CallFrame));
+    }
+
     // Copy back fields since vm->globals might have resized (realloc)
     module->fields = vm->globals;
     
@@ -211,6 +241,12 @@ static KValue load_module_file(KVM* vm, const char* name, const char* path_overr
              vm->globals = saved_globals;
              vm->current_module = saved_module;
              
+             // Restore Frames on Error
+             vm->frame_count = saved_frame_count;
+             if (saved_frame_count > 0) {
+                 memcpy(vm->frames, saved_frames, saved_frame_count * sizeof(CallFrame));
+             }
+
              free_chunk(chunk); free(chunk); free(source);
              return (KValue){VAL_NULL};
         }

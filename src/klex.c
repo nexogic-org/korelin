@@ -161,7 +161,8 @@ static Token read_string(Lexer* lexer, char quote_char) {
             }
         }
         
-        if (len + 1 >= capacity) {
+        // Check capacity for current char AND potential null terminator
+        if (len + 2 > capacity) {
             capacity *= 2;
             char* new_literal = (char*)realloc(literal, capacity);
             if (!new_literal) { free(literal); exit(1); }
@@ -171,6 +172,13 @@ static Token read_string(Lexer* lexer, char quote_char) {
         advance(lexer);
     }
     
+    // Ensure null terminator space (should be guaranteed by loop check, but double check)
+    if (len >= capacity) {
+        capacity += 1;
+        char* new_literal = (char*)realloc(literal, capacity);
+        if (!new_literal) { free(literal); exit(1); }
+        literal = new_literal;
+    }
     literal[len] = '\0';
 
     if (lexer->current_char == quote_char) {
@@ -226,6 +234,7 @@ static KorelinToken lookup_ident(const char* ident) {
     if (strcmp(ident, "extends") == 0) return KORELIN_TOKEN_EXTENDS;
     if (strcmp(ident, "super") == 0) return KORELIN_TOKEN_SUPER;
     if (strcmp(ident, "new") == 0) return KORELIN_TOKEN_NEW;
+    if (strcmp(ident, "throw") == 0) return KORELIN_TOKEN_THROW;
     
     // 類型關鍵字（根據 klex.h 定義，這些也作爲 Token 類型存在）
     if (strcmp(ident, "void") == 0) return KORELIN_TOKEN_VOID;
@@ -351,6 +360,20 @@ Token next_token(Lexer* lexer) {
              if (peek(lexer) == '/') {
                  // Comment: Skip until newline
                  while (lexer->current_char != '\n' && lexer->current_char != '\0') {
+                     advance(lexer);
+                 }
+                 return next_token(lexer);
+             } else if (peek(lexer) == '*') {
+                 // Block Comment: Skip until */
+                 advance(lexer); // consume /
+                 advance(lexer); // consume *
+                 
+                 while (lexer->current_char != '\0') {
+                     if (lexer->current_char == '*' && peek(lexer) == '/') {
+                         advance(lexer); // consume *
+                         advance(lexer); // consume /
+                         break;
+                     }
                      advance(lexer);
                  }
                  return next_token(lexer);
@@ -580,7 +603,7 @@ void free_token(Token* token) {
         is_dynamic = true;
     }
     // 2. 所有關鍵字類型（因爲它們是由 read_identifier 讀取並分配內存的）
-    else if (token->type >= KORELIN_TOKEN_LET && token->type <= KORELIN_TOKEN_NEW) {
+    else if (token->type >= KORELIN_TOKEN_LET && token->type <= KORELIN_TOKEN_THROW) {
         is_dynamic = true;
     }
     // 3. 類型關鍵字 (int, void, bool 等) 如果被 lookup_ident 識別

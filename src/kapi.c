@@ -323,6 +323,7 @@ int KGetArgCount() {
 
 KInt KGetArgInt(int index) {
     if (!g_current_vm || !g_current_vm->native_args) return 0;
+    if (index < 0 || index >= g_current_vm->native_argc) return 0;
     KValue val = g_current_vm->native_args[index];
     if (val.type == VAL_INT) return val.as.integer;
     if (val.type == VAL_FLOAT) return (KInt)val.as.single_prec; // Auto convert?
@@ -332,6 +333,7 @@ KInt KGetArgInt(int index) {
 
 KFloat KGetArgFloat(int index) {
     if (!g_current_vm || !g_current_vm->native_args) return 0.0;
+    if (index < 0 || index >= g_current_vm->native_argc) return 0.0;
     KValue val = g_current_vm->native_args[index];
     if (val.type == VAL_FLOAT) return (double)val.as.single_prec;
     if (val.type == VAL_DOUBLE) return val.as.double_prec;
@@ -341,6 +343,7 @@ KFloat KGetArgFloat(int index) {
 
 KString KGetArgString(int index) {
     if (!g_current_vm || !g_current_vm->native_args) return NULL;
+    if (index < 0 || index >= g_current_vm->native_argc) return NULL;
     KValue val = g_current_vm->native_args[index];
     
     if (val.type == VAL_STRING) return val.as.str;
@@ -356,6 +359,7 @@ KString KGetArgString(int index) {
 
 KBool KGetArgBool(int index) {
     if (!g_current_vm || !g_current_vm->native_args) return false;
+    if (index < 0 || index >= g_current_vm->native_argc) return false;
     KValue val = g_current_vm->native_args[index];
     if (val.type == VAL_BOOL) return val.as.boolean;
     if (val.type == VAL_INT) return val.as.integer != 0;

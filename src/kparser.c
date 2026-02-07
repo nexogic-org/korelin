@@ -427,7 +427,46 @@ static KastNode* parse_literal(Parser* parser) {
     return (KastNode*)node;
 }
 
+static KastNode* parse_array_literal(Parser* parser) {
+    consume(parser, KORELIN_TOKEN_LBRACKET, "Expected '['");
+    
+    KastNode** elements = NULL;
+    size_t count = 0;
+    size_t capacity = 0;
+    
+    if (!check_token(parser, KORELIN_TOKEN_RBRACKET)) {
+        while (!check_token(parser, KORELIN_TOKEN_RBRACKET) && !check_token(parser, KORELIN_TOKEN_EOF)) {
+            KastNode* elem = parse_expression(parser);
+            if (elem) {
+                if (count >= capacity) {
+                    capacity = capacity == 0 ? 4 : capacity * 2;
+                    elements = (KastNode**)realloc(elements, capacity * sizeof(KastNode*));
+                }
+                elements[count++] = elem;
+            }
+            
+            if (check_token(parser, KORELIN_TOKEN_COMMA)) {
+                advance_token(parser);
+            } else {
+                break;
+            }
+        }
+    }
+    
+    consume(parser, KORELIN_TOKEN_RBRACKET, "Expected ']'");
+    
+    KastArrayLiteral* node = (KastArrayLiteral*)malloc(sizeof(KastArrayLiteral));
+    node->base.type = KAST_NODE_ARRAY_LITERAL;
+    node->elements = elements;
+    node->element_count = count;
+    return (KastNode*)node;
+}
+
 static KastNode* parse_primary(Parser* parser) {
+    if (check_token(parser, KORELIN_TOKEN_LBRACKET)) {
+        return parse_array_literal(parser);
+    }
+
     if (check_token(parser, KORELIN_TOKEN_LPAREN)) {
         advance_token(parser);
         KastNode* expr = parse_expression(parser);
@@ -998,8 +1037,16 @@ static KastStatement* parse_typed_declaration(Parser* parser) {
 static char* parse_type_definition(Parser* parser) {
     char* type_name = NULL;
     
-    // 1. 基礎類型或標識符 (支持 dotted names: std.io.File)
-    if (check_token(parser, KORELIN_TOKEN_IDENT) || 
+    // 1. 基礎類型或標識符
+    if (check_token(parser, KORELIN_TOKEN_STRUCT)) {
+        advance_token(parser); // struct
+        if (!check_token(parser, KORELIN_TOKEN_IDENT)) {
+            parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected struct name");
+            return NULL;
+        }
+        type_name = strdup(parser->current_token.value);
+        advance_token(parser);
+    } else if (check_token(parser, KORELIN_TOKEN_IDENT) || 
         (parser->current_token.type >= KORELIN_TOKEN_KEYWORD_STRING && parser->current_token.type <= KORELIN_TOKEN_BOOL) ||
         parser->current_token.type == KORELIN_TOKEN_VOID) {
         
@@ -1638,6 +1685,17 @@ static KastStatement* parse_continue_statement(Parser* parser) {
     return (KastStatement*)stmt;
 }
 
+static KastStatement* parse_throw_statement(Parser* parser) {
+    consume(parser, KORELIN_TOKEN_THROW, "Expected 'throw'");
+    KastNode* value = parse_expression(parser);
+    consume(parser, KORELIN_TOKEN_SEMICOLON, "Expected ';'");
+    
+    KastThrow* stmt = (KastThrow*)malloc(sizeof(KastThrow));
+    stmt->base.type = KAST_NODE_THROW;
+    stmt->value = value;
+    return (KastStatement*)stmt;
+}
+
 // --- Struct 解析 ---
 static KastStatement* parse_struct_declaration(Parser* parser) {
     consume(parser, KORELIN_TOKEN_STRUCT, "Expected 'struct'");
@@ -1891,6 +1949,10 @@ static KastStatement* parse_statement(Parser* parser) {
         return parse_continue_statement(parser);
     }
 
+    if (check_token(parser, KORELIN_TOKEN_THROW)) {
+        return parse_throw_statement(parser);
+    }
+
     if (check_token(parser, KORELIN_TOKEN_LBRACE)) {
         return (KastStatement*)parse_block(parser);
     }
@@ -1900,15 +1962,19 @@ static KastStatement* parse_statement(Parser* parser) {
     }
 
     if (check_token(parser, KORELIN_TOKEN_STRUCT)) {
-        return parse_struct_declaration(parser);
+        // Check if it is a struct definition (struct Name {)
+        if (parser->peek_token.type == KORELIN_TOKEN_IDENT && parser->peek_token_2.type == KORELIN_TOKEN_LBRACE) {
+            return parse_struct_declaration(parser);
+        }
+        // Otherwise treat as variable declaration (struct Name var;)
     }
 
     // 尝试解析类型化的声明 (函数或变量)
-    // 启发式判断：以类型开头 (基础类型, Map, 或 标识符+标识符/泛型/数组)
+    // 启发式判断：以类型开头 (基础类型, Map, 或 标识符+标识符/泛型/数组, 或 struct)
     bool is_decl = false;
     KorelinToken t = parser->current_token.type;
     
-    if (t == KORELIN_TOKEN_MAP) {
+    if (t == KORELIN_TOKEN_MAP || t == KORELIN_TOKEN_STRUCT) {
         is_decl = true;
     } else if ((t >= KORELIN_TOKEN_INT && t <= KORELIN_TOKEN_BOOL) || t == KORELIN_TOKEN_VOID || t == KORELIN_TOKEN_KEYWORD_STRING) {
         // 基础类型后跟标识符或数组
@@ -2440,6 +2506,14 @@ case KAST_NODE_FOR: {
             KastArrayAccess* acc = (KastArrayAccess*)node;
             if (acc->array) free_ast_node(acc->array);
             if (acc->index) free_ast_node(acc->index);
+            break;
+        }
+        case KAST_NODE_ARRAY_LITERAL: {
+            KastArrayLiteral* lit = (KastArrayLiteral*)node;
+            for (size_t i = 0; i < lit->element_count; i++) {
+                free_ast_node(lit->elements[i]);
+            }
+            if (lit->elements) free(lit->elements);
             break;
         }
         case KAST_NODE_BINARY_OP: {

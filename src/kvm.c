@@ -172,8 +172,16 @@ static bool call(KVM* vm, KObjFunction* function, int arg_count, int return_reg)
     
     // New register window starts at arguments
     vm->registers = vm->stack_top - arg_count;
+    
+    // Check stack overflow before moving stack_top
+    if (vm->registers + KVM_REGISTERS_MAX - vm->stack >= KVM_STACK_SIZE) {
+        printf("Runtime Error: Stack overflow (memory limit).\n");
+        vm->had_error = true;
+        return false;
+    }
+    
     // Reserve space for locals
-    vm->stack_top = vm->registers + 64; 
+    vm->stack_top = vm->registers + KVM_REGISTERS_MAX; 
 
     /* JIT Disabled
     // Try JIT Compilation for the called function
