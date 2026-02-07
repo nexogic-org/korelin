@@ -893,6 +893,8 @@ static KastStatement* parse_function_declaration(Parser* parser, char* return_ty
     func->body = body;
     func->generic_params = generic_params;
     func->generic_count = generic_count;
+    func->parent_class_name = NULL;
+    func->access = KAST_ACCESS_PUBLIC;
     
     return (KastStatement*)func;
 }
