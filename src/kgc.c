@@ -7,6 +7,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #define GC_HEAP_GROW_FACTOR 2
 #define GC_INITIAL_THRESHOLD (1024 * 1024) // 1MB
 
@@ -23,6 +27,15 @@ void kgc_init(KGC* gc, KVM* vm) {
     gc->next_gc_threshold = GC_INITIAL_THRESHOLD;
     gc->vm = vm;
     gc->gc_count = 0;
+#ifdef _WIN32
+    // Create a private heap. 
+    // Options: 0 (defaults), InitialSize=0, MaximumSize=0 (growable)
+    gc->heap_handle = HeapCreate(0, 0, 0);
+    if (gc->heap_handle == NULL) {
+        fprintf(stderr, "[KGC] Failed to create Windows Heap! Error: %lu\n", GetLastError());
+        exit(1);
+    }
+#endif
 }
 
 void kgc_free(KGC* gc) {
@@ -32,11 +45,58 @@ void kgc_free(KGC* gc) {
         KObjHeader* next = obj->next;
         // free(obj); // 對象頭和數據是一起分配的，直接釋放頭指針即可
         // 如果對象內部持有非 GC 管理的資源 (如 FILE*), 需要先調用析構
+        
+        // Free internal resources (CRT Heap)
+        switch (obj->type) {
+            case OBJ_STRING: {
+                KObjString* str = (KObjString*)obj;
+                if (str->chars) free(str->chars);
+                break;
+            }
+            case OBJ_ARRAY: {
+                KObjArray* arr = (KObjArray*)obj;
+                if (arr->elements) free(arr->elements);
+                break;
+            }
+            case OBJ_CLASS_INSTANCE: {
+                KObjInstance* ins = (KObjInstance*)obj;
+                free_table(&ins->fields);
+                break;
+            }
+            case OBJ_CLASS: {
+                KObjClass* cls = (KObjClass*)obj;
+                free_table(&cls->methods);
+                if (cls->name) free(cls->name);
+                break;
+            }
+            case OBJ_FUNCTION: {
+                KObjFunction* func = (KObjFunction*)obj;
+                if (func->name) free(func->name);
+                break;
+            }
+            case OBJ_NATIVE: {
+                KObjNative* nat = (KObjNative*)obj;
+                if (nat->name) free(nat->name);
+                break;
+            }
+            default: break;
+        }
+
+#ifdef _WIN32
+        HeapFree(gc->heap_handle, 0, obj);
+#else
         free(obj);
+#endif
         obj = next;
     }
     gc->head = NULL;
     gc->bytes_allocated = 0;
+#ifdef _WIN32
+    if (gc->heap_handle) {
+        HeapDestroy(gc->heap_handle);
+        gc->heap_handle = NULL;
+    }
+#endif
 }
 
 void* kgc_alloc(KGC* gc, size_t size, KObjType type) {
@@ -45,15 +105,23 @@ void* kgc_alloc(KGC* gc, size_t size, KObjType type) {
         kgc_collect(gc);
     }
 
-    // 計算總大小：頭部 + 數據
-    // 注意內存對齊 (這裏簡化處理，malloc 通常保證指針對齊)
-    size_t total_size = sizeof(KObjHeader) + size;
+    // 計算總大小：即請求的大小 (調用者負責傳入結構體的總大小)
+    size_t total_size = size;
     
+#ifdef _WIN32
+    KObjHeader* header = (KObjHeader*)HeapAlloc(gc->heap_handle, HEAP_ZERO_MEMORY, total_size);
+#else
     KObjHeader* header = (KObjHeader*)malloc(total_size);
+#endif
+
     if (header == NULL) {
         // 嘗試緊急 GC
         kgc_collect(gc);
+#ifdef _WIN32
+        header = (KObjHeader*)HeapAlloc(gc->heap_handle, HEAP_ZERO_MEMORY, total_size);
+#else
         header = (KObjHeader*)malloc(total_size);
+#endif
         if (header == NULL) {
             fprintf(stderr, "[KGC] Out of memory! Failed to allocate %zu bytes.\n", total_size);
             exit(1);
@@ -68,18 +136,28 @@ void* kgc_alloc(KGC* gc, size_t size, KObjType type) {
     // 插入到鏈表頭部 (O(1))
     header->next = gc->head;
     gc->head = header;
+    
+    // Sync vm->objects for legacy code support
+    if (gc->vm) {
+        gc->vm->objects = header;
+    }
 
     gc->bytes_allocated += total_size;
 
-    // 清零數據區 (安全起見)
-    void* data_ptr = (void*)(header + 1);
-    memset(data_ptr, 0, size);
-
-#ifdef DEBUG_GC
-    printf("[KGC] Alloc type %d, size %zu, total %zu at %p\n", type, size, total_size, data_ptr);
+    // 清零數據區 (從頭部之後開始)
+    // HeapAlloc with HEAP_ZERO_MEMORY already zeroed it on Windows.
+#ifndef _WIN32
+    if (size > sizeof(KObjHeader)) {
+        void* data_ptr = (void*)(header + 1);
+        memset(data_ptr, 0, size - sizeof(KObjHeader));
+    }
 #endif
 
-    return data_ptr;
+#ifdef DEBUG_GC
+    printf("[KGC] Alloc type %d, size %zu at %p. Header type set to %d\n", type, size, header, header->type);
+#endif
+
+    return header;
 }
 
 void kgc_collect(KGC* gc) {
@@ -110,7 +188,7 @@ void kgc_collect(KGC* gc) {
 }
 
 KObjHeader* kgc_get_header(void* ptr) {
-    return ((KObjHeader*)ptr) - 1;
+    return (KObjHeader*)ptr;
 }
 
 // --- 標記階段 (Mark) ---
@@ -129,11 +207,10 @@ void kgc_mark_obj(KGC* gc, KObjHeader* obj) {
 }
 
 void kgc_mark_value(KGC* gc, KValue value) {
-    if (value.type == VAL_OBJ || value.type == VAL_STRING) {
-        if (value.as.obj == NULL) return;
-        KObjHeader* header = kgc_get_header(value.as.obj);
-        kgc_mark_obj(gc, header);
-    }
+    if (value.type != VAL_OBJ) return;
+    if (value.as.obj == NULL) return;
+    KObjHeader* header = kgc_get_header(value.as.obj);
+    kgc_mark_obj(gc, header);
 }
 
 static void mark_roots(KGC* gc) {
@@ -154,6 +231,18 @@ static void mark_roots(KGC* gc) {
     
     // 4. 標記全局變量 (如果有的話)
     // 假設全局變量存儲在某個全局 Table 中，該 Table 應該被標記
+    for (int i = 0; i < vm->globals.capacity; i++) {
+        if (vm->globals.entries[i].key != NULL) {
+            kgc_mark_value(gc, vm->globals.entries[i].value);
+        }
+    }
+
+    // 5. 標記模塊
+    for (int i = 0; i < vm->modules.capacity; i++) {
+        if (vm->modules.entries[i].key != NULL) {
+            kgc_mark_value(gc, vm->modules.entries[i].value);
+        }
+    }
 }
 
 static void blacken_object(KGC* gc, KObjHeader* obj) {
@@ -230,7 +319,48 @@ static void sweep(KGC* gc) {
 #endif
 
             gc->bytes_allocated -= unreached->size;
+            
+            // 釋放對象持有的資源
+            switch (unreached->type) {
+                case OBJ_STRING: {
+                    KObjString* str = (KObjString*)unreached;
+                    if (str->chars) free(str->chars);
+                    break;
+                }
+                case OBJ_ARRAY: {
+                    KObjArray* arr = (KObjArray*)unreached;
+                    if (arr->elements) free(arr->elements);
+                    break;
+                }
+                case OBJ_CLASS_INSTANCE: {
+                    KObjInstance* ins = (KObjInstance*)unreached;
+                    free_table(&ins->fields);
+                    break;
+                }
+                case OBJ_CLASS: {
+                    KObjClass* cls = (KObjClass*)unreached;
+                    free_table(&cls->methods);
+                    if (cls->name) free(cls->name);
+                    break;
+                }
+                case OBJ_FUNCTION: {
+                    KObjFunction* func = (KObjFunction*)unreached;
+                    if (func->name) free(func->name);
+                    break;
+                }
+                case OBJ_NATIVE: {
+                    KObjNative* nat = (KObjNative*)unreached;
+                    if (nat->name) free(nat->name);
+                    break;
+                }
+                default: break;
+            }
+
+#ifdef _WIN32
+            HeapFree(gc->heap_handle, 0, unreached);
+#else
             free(unreached);
+#endif
         }
     }
 }

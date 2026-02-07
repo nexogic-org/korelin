@@ -114,7 +114,7 @@ static void push_value(KValue v) {
 
 // Helper to create a new String Object directly
 static KObjString* alloc_string(KVM* vm, const char* chars, int length) {
-    KObjString* str = (KObjString*)kgc_alloc(vm->gc, sizeof(KObjString) - sizeof(KObjHeader), OBJ_STRING);
+    KObjString* str = (KObjString*)kgc_alloc(vm->gc, sizeof(KObjString), OBJ_STRING);
     
     str->length = length;
     str->chars = (char*)malloc(length + 1);
@@ -126,11 +126,8 @@ static KObjString* alloc_string(KVM* vm, const char* chars, int length) {
 
 // Helper to create a new Array Object
 static KObjArray* alloc_array(KVM* vm, int length) {
-    // Temporary: Use malloc to isolate GC issues
-    KObjArray* arr = (KObjArray*)malloc(sizeof(KObjArray));
-    arr->header.type = OBJ_ARRAY;
-    arr->header.marked = false;
-    arr->header.next = NULL; // Don't track in GC list
+    // Use kgc_alloc to match unified allocator
+    KObjArray* arr = (KObjArray*)kgc_alloc(vm->gc, sizeof(KObjArray), OBJ_ARRAY);
     
     arr->length = length;
     arr->capacity = length > 0 ? length : 0;
@@ -151,7 +148,7 @@ static KObjArray* alloc_array(KVM* vm, int length) {
 
 // Helper to create a new Instance Object (acting as Map/Object)
 static KObjInstance* alloc_instance(KVM* vm, KObjClass* klass) {
-    KObjInstance* ins = (KObjInstance*)kgc_alloc(vm->gc, sizeof(KObjInstance) - sizeof(KObjHeader), OBJ_CLASS_INSTANCE);
+    KObjInstance* ins = (KObjInstance*)kgc_alloc(vm->gc, sizeof(KObjInstance), OBJ_CLASS_INSTANCE);
     
     ins->klass = klass; 
     init_table(&ins->fields);
@@ -2106,12 +2103,7 @@ static void register_exception(const char* name) {
     KVM* vm = get_vm();
     
     // Create class object
-    KObjClass* klass = (KObjClass*)malloc(sizeof(KObjClass));
-    klass->header.type = OBJ_CLASS;
-    klass->header.marked = false;
-    klass->header.next = vm->objects;
-    klass->header.size = sizeof(KObjClass);
-    vm->objects = (KObjHeader*)klass;
+    KObjClass* klass = (KObjClass*)kgc_alloc(vm->gc, sizeof(KObjClass), OBJ_CLASS);
     
     klass->name = strdup(name);
     klass->parent = NULL; 
@@ -2257,6 +2249,7 @@ void kstd_register() {
     KLibAdd("os", "function", "int", (void*)&std_global_int);
     KLibAdd("os", "function", "float", (void*)&std_global_float);
     KLibAdd("os", "function", "string", (void*)&std_global_string);
+    KLibAdd("os", "function", "str", (void*)&std_global_string); // Alias for string
     KLibAdd("os", "function", "bool", (void*)&std_global_bool);
 
     // Map Class

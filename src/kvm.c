@@ -499,12 +499,7 @@ static bool values_equal(KValue a, KValue b) {
 
 // Helper for string concat
 static KObjString* alloc_string(KVM* vm, const char* chars, int length) {
-    KObjString* str = (KObjString*)malloc(sizeof(KObjString));
-    str->header.type = OBJ_STRING;
-    str->header.marked = false;
-    str->header.next = vm->objects;
-    str->header.size = sizeof(KObjString) + length + 1;
-    vm->objects = (KObjHeader*)str;
+    KObjString* str = (KObjString*)kgc_alloc(vm->gc, sizeof(KObjString), OBJ_STRING);
     
     str->length = length;
     str->chars = (char*)malloc(length + 1);
@@ -515,12 +510,7 @@ static KObjString* alloc_string(KVM* vm, const char* chars, int length) {
 }
 
 KObjArray* alloc_array(KVM* vm, int length) {
-    KObjArray* arr = (KObjArray*)malloc(sizeof(KObjArray));
-    arr->header.type = OBJ_ARRAY;
-    arr->header.marked = false;
-    arr->header.next = vm->objects;
-    arr->header.size = sizeof(KObjArray) + sizeof(KValue) * length;
-    vm->objects = (KObjHeader*)arr;
+    KObjArray* arr = (KObjArray*)kgc_alloc(vm->gc, sizeof(KObjArray), OBJ_ARRAY);
     
     arr->length = length;
     arr->capacity = length;
@@ -591,6 +581,10 @@ void kvm_init(KVM* vm) {
     vm->objects = NULL;
     vm->gc = (KGC*)malloc(sizeof(KGC));
     kgc_init(vm->gc, vm);
+
+    init_table(&vm->globals);
+    init_table(&vm->modules);
+    init_table(&vm->lib_paths);
 }
 
 void kvm_free(KVM* vm) {
@@ -665,12 +659,7 @@ static bool throw_runtime_error_obj(KVM* vm, const char* type, const char* msg) 
         klass = (KObjClass*)class_val.as.obj;
     }
     
-    KObjInstance* ex = (KObjInstance*)malloc(sizeof(KObjInstance));
-    ex->header.type = OBJ_CLASS_INSTANCE;
-    ex->header.marked = false;
-    ex->header.next = vm->objects;
-    ex->header.size = sizeof(KObjInstance);
-    vm->objects = (KObjHeader*)ex;
+    KObjInstance* ex = (KObjInstance*)kgc_alloc(vm->gc, sizeof(KObjInstance), OBJ_CLASS_INSTANCE);
     ex->klass = klass;
     init_table(&ex->fields);
     
@@ -1127,12 +1116,7 @@ int kvm_run(KVM* vm) {
                 
                 char* name = vm->chunk->string_table[name_id];
                 
-                KObjFunction* func = (KObjFunction*)malloc(sizeof(KObjFunction));
-                func->header.type = OBJ_FUNCTION;
-                func->header.marked = false;
-                func->header.next = vm->objects;
-                func->header.size = sizeof(KObjFunction);
-                vm->objects = (KObjHeader*)func;
+                KObjFunction* func = (KObjFunction*)kgc_alloc(vm->gc, sizeof(KObjFunction), OBJ_FUNCTION);
                 
                 func->name = strdup(name);
                 func->arity = arity;
@@ -1266,12 +1250,7 @@ int kvm_run(KVM* vm) {
                     // Class Instantiation
                     KObjClass* klass = (KObjClass*)target_val.as.obj;
                     
-                    KObjInstance* inst = (KObjInstance*)malloc(sizeof(KObjInstance));
-                    inst->header.type = OBJ_CLASS_INSTANCE;
-                    inst->header.marked = false;
-                    inst->header.next = vm->objects;
-                    inst->header.size = sizeof(KObjInstance);
-                    vm->objects = (KObjHeader*)inst;
+                    KObjInstance* inst = (KObjInstance*)kgc_alloc(vm->gc, sizeof(KObjInstance), OBJ_CLASS_INSTANCE);
                     
                     init_table(&inst->fields);
                     inst->klass = klass;
@@ -1343,27 +1322,59 @@ int kvm_run(KVM* vm) {
             case KOP_NEWA: { // NEWA Rd, SizeReg
                 uint8_t rd = READ_REG_IDX();
                 uint8_t rs = READ_REG_IDX();
-                READ_BYTE(); // padding
+                uint16_t type_id = READ_IMM16();
                 
                 if (REG(rs).type != VAL_INT) RUNTIME_ERROR("Array size must be integer");
                 int size = (int)REG_AS_INT(rs);
                 if (size < 0) RUNTIME_ERROR("Negative array size");
                 
-                KObjArray* arr = (KObjArray*)malloc(sizeof(KObjArray));
+                KObjArray* arr = (KObjArray*)kgc_alloc(vm->gc, sizeof(KObjArray), OBJ_ARRAY);
                 if (!arr) RUNTIME_ERROR("Memory allocation failed");
                 
                 // Init header
-                arr->header.type = OBJ_ARRAY;
-                arr->header.marked = false;
-                arr->header.next = NULL;
-                arr->header.size = sizeof(KObjArray) + size * sizeof(KValue);
+                // kgc_alloc sets type, marked, size, next
                 
                 arr->length = size;
                 arr->capacity = size; // Initialize capacity!
                 arr->elements = (KValue*)calloc(size, sizeof(KValue));
                 if (!arr->elements && size > 0) {
-                    free(arr);
+                    // free(arr); // Let GC handle it or HeapFree
                     RUNTIME_ERROR("Memory allocation failed");
+                }
+                
+                // Initialize elements based on type
+                char* type_name = vm->chunk->string_table[type_id];
+                
+                KValue class_val;
+                KObjClass* klass = NULL;
+                // Try to resolve type as class (for Structs/Classes)
+                if (table_get(&vm->globals, type_name, &class_val) && 
+                    class_val.type == VAL_OBJ && 
+                    ((KObj*)class_val.as.obj)->header.type == OBJ_CLASS) {
+                    klass = (KObjClass*)class_val.as.obj;
+                }
+
+                for (int i=0; i<size; i++) {
+                    if (klass) {
+                        // Instantiate Struct/Class
+                        KObjInstance* inst = (KObjInstance*)kgc_alloc(vm->gc, sizeof(KObjInstance), OBJ_CLASS_INSTANCE);
+                        init_table(&inst->fields);
+                        inst->klass = klass;
+                        
+                        arr->elements[i].type = VAL_OBJ;
+                        arr->elements[i].as.obj = (KObj*)inst;
+                    } else if (strcmp(type_name, "int") == 0) {
+                        arr->elements[i].type = VAL_INT;
+                        arr->elements[i].as.integer = 0;
+                    } else if (strcmp(type_name, "float") == 0) {
+                        arr->elements[i].type = VAL_FLOAT;
+                        arr->elements[i].as.single_prec = 0.0f;
+                    } else if (strcmp(type_name, "bool") == 0) {
+                        arr->elements[i].type = VAL_BOOL;
+                        arr->elements[i].as.boolean = false;
+                    } else {
+                        arr->elements[i].type = VAL_NULL;
+                    }
                 }
                 
                 REG(rd).type = VAL_OBJ;
@@ -1382,7 +1393,7 @@ int kvm_run(KVM* vm) {
                 
                 if (REG(rb).type != VAL_INT) RUNTIME_ERROR("Index must be integer");
                 int index = (int)REG_AS_INT(rb);
-                if (index < 0 || index >= arr->length) RUNTIME_ERROR("Index out of bounds");
+                if (index < 0 || index >= arr->length) THROW_ERROR("IndexOutOfBoundsError", "Index out of bounds");
                 
                 REG(rd) = arr->elements[index];
                 break;
@@ -1399,7 +1410,7 @@ int kvm_run(KVM* vm) {
                 
                 if (REG(rb).type != VAL_INT) RUNTIME_ERROR("Index must be integer");
                 int index = (int)REG_AS_INT(rb);
-                if (index < 0 || index >= arr->length) RUNTIME_ERROR("Index out of bounds");
+                if (index < 0 || index >= arr->length) THROW_ERROR("IndexOutOfBoundsError", "Index out of bounds");
                 
                 arr->elements[index] = REG(rc);
                 break;
@@ -1434,10 +1445,10 @@ int kvm_run(KVM* vm) {
                 if (obj->header.type == OBJ_CLASS_INSTANCE) {
                     KObjInstance* inst = (KObjInstance*)obj;
                     KValue val;
-                    printf("DEBUG: GETF %s on Instance\n", key);
+                    // printf("DEBUG: GETF %s on Instance\n", key);
                     
                     if (table_get(&inst->fields, key, &val)) {
-                        printf("DEBUG: Found in fields\n");
+                        // printf("DEBUG: Found in fields\n");
                         REG(rd) = val;
                     } else {
                         // Look up method in class chain
@@ -1452,14 +1463,8 @@ int kvm_run(KVM* vm) {
                         }
                         
                         if (found) {
-                             printf("DEBUG: Found in methods, creating BoundMethod\n");
                              // Create Bound Method
-                             KObjBoundMethod* bound = (KObjBoundMethod*)malloc(sizeof(KObjBoundMethod));
-                             bound->header.type = OBJ_BOUND_METHOD;
-                             bound->header.marked = false;
-                             bound->header.next = vm->objects;
-                             bound->header.size = sizeof(KObjBoundMethod);
-                             vm->objects = (KObjHeader*)bound;
+                             KObjBoundMethod* bound = (KObjBoundMethod*)kgc_alloc(vm->gc, sizeof(KObjBoundMethod), OBJ_BOUND_METHOD);
                              
                              bound->receiver = REG(ra);
                              bound->method = (KObjFunction*)val.as.obj;
@@ -1590,12 +1595,7 @@ int kvm_run(KVM* vm) {
                 uint16_t name_id = READ_IMM16();
                 char* name = vm->chunk->string_table[name_id];
                 
-                KObjClass* klass = (KObjClass*)malloc(sizeof(KObjClass));
-                klass->header.type = OBJ_CLASS;
-                klass->header.marked = false;
-                klass->header.next = vm->objects;
-                klass->header.size = sizeof(KObjClass);
-                vm->objects = (KObjHeader*)klass;
+                KObjClass* klass = (KObjClass*)kgc_alloc(vm->gc, sizeof(KObjClass), OBJ_CLASS);
                 
                 klass->name = strdup(name);
                 klass->parent = NULL;
@@ -1697,12 +1697,7 @@ int kvm_run(KVM* vm) {
                 }
                 
                 // Create Bound Method
-                KObjBoundMethod* bound = (KObjBoundMethod*)malloc(sizeof(KObjBoundMethod));
-                bound->header.type = OBJ_BOUND_METHOD;
-                bound->header.marked = false;
-                bound->header.next = vm->objects;
-                bound->header.size = sizeof(KObjBoundMethod);
-                vm->objects = (KObjHeader*)bound;
+                KObjBoundMethod* bound = (KObjBoundMethod*)kgc_alloc(vm->gc, sizeof(KObjBoundMethod), OBJ_BOUND_METHOD);
                 
                 bound->receiver = REG(ra);
                 bound->method = (KObjFunction*)method_val.as.obj;
@@ -1891,9 +1886,6 @@ int kvm_run(KVM* vm) {
             case KOP_DEBUG: {
                 uint8_t rd = READ_REG_IDX();
                 READ_BYTE(); READ_BYTE();
-                printf("DEBUG: Reg[%d] = ", rd);
-                kvm_print_value(REG(rd));
-                printf("\n");
                 break;
             }
 

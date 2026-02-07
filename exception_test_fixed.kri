@@ -1,0 +1,13 @@
+import os;
+
+int main() {
+    os.println("Step 1: Start");
+    try {
+        var arr = [1, 2, 3];
+        var val = arr[5];
+    } catch (IndexOutOfBoundsError) {
+        os.println("Caught IndexOutOfBoundsError!");
+    }
+    os.println("Step 3: Done");
+    return 0;
+}

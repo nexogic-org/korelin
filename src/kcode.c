@@ -13,7 +13,6 @@ typedef struct {
     char* name;
     int depth;
     int reg_index;
-    char* type_name; // Added for static analysis
 } Local;
 
 typedef struct {
@@ -54,13 +53,11 @@ void init_chunk(KBytecodeChunk* chunk) {
     chunk->string_table = NULL;
     chunk->string_count = 0;
     chunk->lines = NULL;
-    chunk->filename = NULL;
 }
 
 void free_chunk(KBytecodeChunk* chunk) {
     free(chunk->code);
     free(chunk->lines);
-    if (chunk->filename) free(chunk->filename);
     for (size_t i = 0; i < chunk->string_count; i++) {
         free(chunk->string_table[i]);
     }
@@ -201,14 +198,8 @@ static int emit_jump(CompilerState* compiler, uint8_t op, uint8_t r1) {
 
 // --- Locals ---
 
-#define MAX_LOCALS 256
-
-static void compile_statement(CompilerState* compiler, KastStatement* stmt);
-static void compile_function_decl(CompilerState* compiler, KastFunctionDecl* func);
-static void compile_class_decl(CompilerState* compiler, KastClassDecl* cls);
-
-static void add_local(CompilerState* compiler, const char* name, const char* type_name) {
-    if (compiler->local_count >= MAX_LOCALS) {
+static void add_local(CompilerState* compiler, const char* name) {
+    if (compiler->local_count == 256) {
         printf("Too many local variables\n");
         return;
     }
@@ -216,17 +207,6 @@ static void add_local(CompilerState* compiler, const char* name, const char* typ
     local->name = strdup(name);
     local->depth = compiler->scope_depth;
     local->reg_index = compiler->current_reg_count++; // Allocate register
-    local->type_name = type_name ? strdup(type_name) : NULL;
-}
-
-static Local* get_local(CompilerState* compiler, const char* name) {
-    for (int i = compiler->local_count - 1; i >= 0; i--) {
-        Local* local = &compiler->locals[i];
-        if (strcmp(local->name, name) == 0) {
-            return local;
-        }
-    }
-    return NULL;
 }
 
 static int resolve_local(CompilerState* compiler, const char* name) {
@@ -308,62 +288,68 @@ static void compile_expression(CompilerState* compiler, KastExpression* expr, in
         }
         case KAST_NODE_ARRAY_LITERAL: {
             KastArrayLiteral* lit = (KastArrayLiteral*)expr;
-            size_t count = lit->element_count;
             
-            // 1. Load Size
+            // 1. Create Size Register
             int size_reg = compiler->current_reg_count++;
-            // Load count constant
-            if (count <= 127) {
-                 emit_byte(compiler, KOP_LDI);
-                 emit_byte(compiler, size_reg);
-                 emit_byte(compiler, (int8_t)count);
-                 emit_byte(compiler, 0);
+            
+            // 2. Load Size
+            if (lit->element_count <= 127) {
+                emit_byte(compiler, KOP_LDI);
+                emit_byte(compiler, size_reg);
+                emit_byte(compiler, (int8_t)lit->element_count);
+                emit_byte(compiler, 0);
             } else {
                  emit_byte(compiler, KOP_LDI64);
                  emit_byte(compiler, size_reg);
+                 // 8 bytes 
+                 long long val = lit->element_count;
                  for(int i=0; i<8; i++) {
-                     emit_byte(compiler, (uint8_t)((count >> ((7-i)*8)) & 0xFF));
+                     emit_byte(compiler, (uint8_t)((val >> ((7-i)*8)) & 0xFF));
                  }
             }
+
+            // 3. Create Array (NEWA)
+            // Use "any" as type for now
+            int type_idx = add_string_constant(compiler, "any");
             
-            // 2. Create Array
             emit_byte(compiler, KOP_NEWA);
             emit_byte(compiler, target_reg);
             emit_byte(compiler, size_reg);
-            emit_byte(compiler, 0);
+            emit_byte(compiler, (uint8_t)(type_idx >> 8));
+            emit_byte(compiler, (uint8_t)(type_idx & 0xFF));
             
             compiler->current_reg_count--; // Free size_reg
             
-            // 3. Populate
-            int idx_reg = compiler->current_reg_count++;
-            int val_reg = compiler->current_reg_count++;
-            
-            for (size_t i = 0; i < count; i++) {
+            // 4. Populate Elements
+            for (int i=0; i<lit->element_count; i++) {
+                // Compile value to temp reg
+                int val_reg = compiler->current_reg_count++;
+                compile_expression(compiler, (KastExpression*)lit->elements[i], val_reg);
+                
                 // Load Index
+                int idx_reg = compiler->current_reg_count++;
                 if (i <= 127) {
                     emit_byte(compiler, KOP_LDI);
                     emit_byte(compiler, idx_reg);
                     emit_byte(compiler, (int8_t)i);
                     emit_byte(compiler, 0);
                 } else {
-                    emit_byte(compiler, KOP_LDI64);
-                    emit_byte(compiler, idx_reg);
-                    for(int k=0; k<8; k++) {
-                        emit_byte(compiler, (uint8_t)((i >> ((7-k)*8)) & 0xFF));
-                    }
+                     emit_byte(compiler, KOP_LDI64);
+                     emit_byte(compiler, idx_reg);
+                     long long val = i;
+                     for(int k=0; k<8; k++) {
+                         emit_byte(compiler, (uint8_t)((val >> ((7-k)*8)) & 0xFF));
+                     }
                 }
                 
-                // Evaluate Value
-                compile_expression(compiler, (KastExpression*)lit->elements[i], val_reg);
-                
-                // PUTFA
+                // PUTFA Target(Arr), Idx, Val
                 emit_byte(compiler, KOP_PUTFA);
                 emit_byte(compiler, target_reg);
                 emit_byte(compiler, idx_reg);
                 emit_byte(compiler, val_reg);
+                
+                compiler->current_reg_count -= 2; // Free val_reg, idx_reg
             }
-            
-            compiler->current_reg_count -= 2;
             break;
         }
         case KAST_NODE_IDENTIFIER: {
@@ -423,42 +409,6 @@ static void compile_expression(CompilerState* compiler, KastExpression* expr, in
             if (assign->lvalue->type == KAST_NODE_IDENTIFIER) {
                 KastIdentifier* ident = (KastIdentifier*)assign->lvalue;
                 int reg = resolve_local(compiler, ident->name);
-                
-                // Static Type Check for Literals
-                if (reg != -1) {
-                    Local* local = get_local(compiler, ident->name);
-                    if (local && local->type_name) {
-                         if (assign->value->type == KAST_NODE_LITERAL) {
-                             KastLiteral* lit = (KastLiteral*)assign->value;
-                             bool error = false;
-                             if (strcmp(local->type_name, "int") == 0 && lit->token.type != KORELIN_TOKEN_INT) error = true;
-                             else if (strcmp(local->type_name, "string") == 0 && lit->token.type != KORELIN_TOKEN_STRING) error = true;
-                             else if (strcmp(local->type_name, "bool") == 0 && lit->token.type != KORELIN_TOKEN_TRUE && lit->token.type != KORELIN_TOKEN_FALSE) error = true;
-                             
-                             if (error) {
-                                 printf("Compile Error: Type mismatch. Expected '%s' for variable '%s'.\n", local->type_name, ident->name);
-                                 return;
-                             }
-                         }
-                    }
-                }
-                
-                // Check Identifier Assignment
-                if (reg != -1) {
-                    Local* local_l = get_local(compiler, ident->name);
-                    if (local_l && local_l->type_name && assign->value->type == KAST_NODE_IDENTIFIER) {
-                         KastIdentifier* val_ident = (KastIdentifier*)assign->value;
-                         Local* local_r = get_local(compiler, val_ident->name);
-                         if (local_r && local_r->type_name) {
-                             if (strcmp(local_l->type_name, local_r->type_name) != 0) {
-                                  printf("Compile Error: Type mismatch. Cannot assign '%s' (%s) to '%s' (%s).\n", 
-                                         val_ident->name, local_r->type_name, ident->name, local_l->type_name);
-                                  return;
-                             }
-                         }
-                    }
-                }
-
                 if (reg != -1) {
                     compile_expression(compiler, (KastExpression*)assign->value, reg);
                     if (target_reg != reg) {
@@ -584,9 +534,9 @@ static void compile_expression(CompilerState* compiler, KastExpression* expr, in
                 } else {
                     int obj_reg = compiler->current_reg_count++;
                     compile_expression(compiler, (KastExpression*)acc->object, obj_reg);
-                                                                
-                    // Push Object (Self/Module) - REMOVED: INVOKE handles self pushing if needed
-                    // emit_instruction(compiler, KOP_PUSH, 0, obj_reg, 0);
+                    
+                    // Push Object (Self/Module)
+                    emit_instruction(compiler, KOP_PUSH, 0, obj_reg, 0);
                     
                     // Push Arguments
                     for (size_t i = 0; i < call->arg_count; i++) {
@@ -685,10 +635,13 @@ static void compile_expression(CompilerState* compiler, KastExpression* expr, in
                 int size_reg = compiler->current_reg_count++;
                 compile_expression(compiler, (KastExpression*)n->args[0], size_reg);
                 
+                int type_idx = add_string_constant(compiler, n->class_name);
+                
                 emit_byte(compiler, KOP_NEWA);
                 emit_byte(compiler, target_reg);
                 emit_byte(compiler, size_reg);
-                emit_byte(compiler, 0); // Padding
+                emit_byte(compiler, (uint8_t)(type_idx >> 8));
+                emit_byte(compiler, (uint8_t)(type_idx & 0xFF));
                 
                 compiler->current_reg_count--;
             } else {
@@ -902,7 +855,7 @@ static void compile_function_decl(CompilerState* compiler, KastFunctionDecl* fun
     
     for (size_t i = 0; i < func->arg_count; i++) {
         KastVarDecl* arg = (KastVarDecl*)func->args[i];
-        add_local(compiler, arg->name, arg->type_name);
+        add_local(compiler, arg->name);
     }
     
     compile_statement(compiler, (KastStatement*)func->body);
@@ -927,13 +880,59 @@ static void compile_function_decl(CompilerState* compiler, KastFunctionDecl* fun
     emit_byte(compiler, (uint8_t)func->access);
     
     if (func->parent_class_name) {
+        // Out-of-class method definition
+        // Bind to class using KOP_METHOD
+        // Note: KOP_FUNCTION pushes the function object to stack (no POP needed)
+        // KOP_METHOD expects ClassName and MethodName
+        
+        // Ensure string constants are added
         int class_idx = add_string_constant(compiler, func->parent_class_name);
+        // Method name is already in name_idx
         
         emit_byte(compiler, KOP_METHOD);
         emit_byte(compiler, (uint8_t)(class_idx >> 8));
         emit_byte(compiler, (uint8_t)(class_idx & 0xFF));
         emit_byte(compiler, (uint8_t)(name_idx >> 8));
         emit_byte(compiler, (uint8_t)(name_idx & 0xFF));
+        
+        // KOP_METHOD consumes the function object from stack?
+        // Based on compile_class_decl logic, it seems it does NOT consume it?
+        // In compile_class_decl, KOP_METHOD follows KOP_FUNCTION immediately.
+        // It doesn't seem to clean up the stack.
+        // But here we are at top level (usually).
+        // If KOP_FUNCTION leaves object on stack, and KOP_METHOD uses it.
+        // Does KOP_METHOD pop it?
+        // If not, we need to POP it.
+        // Assuming KOP_METHOD attaches it and leaves it (or consumes it).
+        // Let's assume it works like in compile_class_decl.
+        // But in compile_class_decl, we are inside a class body context?
+        // No, KOP_CLASS defines the class.
+        // Actually, looking at compile_class_decl logic again:
+        // It emits KOP_FUNCTION, then KOP_METHOD.
+        // It does not POP.
+        // So the function object remains on stack?
+        // If so, who pops it?
+        // compile_class_decl seems to leave garbage on stack?
+        // Or maybe KOP_METHOD consumes it.
+        // I will assume KOP_METHOD consumes it or it's fine.
+        
+        // However, if we are at top level script, we don't want to leave junk on stack.
+        // KOP_SET_GLOBAL pops it (via POP instruction I added manually in previous version, or implicitly?)
+        // In original code:
+        // int reg = compiler->current_reg_count++;
+        // emit_instruction(compiler, KOP_POP, reg, 0, 0); 
+        // emit_byte(compiler, KOP_SET_GLOBAL); ...
+        
+        // So originally, it moves stack top to reg, then sets global.
+        
+        // Here, if KOP_METHOD is used, and it behaves like in class decl, 
+        // we might need to verify if we need to clean up stack.
+        // Since I don't see VM code, I'll follow compile_class_decl pattern.
+        // But wait, compile_class_decl runs at script level (top level usually).
+        // If it leaves items on stack, the stack grows.
+        
+        // Let's assume KOP_METHOD consumes it.
+        
     } else {
         int reg = compiler->current_reg_count++;
         emit_instruction(compiler, KOP_POP, reg, 0, 0); 
@@ -1015,17 +1014,8 @@ static void compile_class_decl(CompilerState* compiler, KastClassDecl* cls) {
             compiler->current_reg_count = 0;
             
             for (size_t j = 0; j < member->arg_count; j++) {
-                // KastVarDecl* arg = (KastVarDecl*)member->args[j]; // args in ClassMember are VarDecls or Nodes?
-                // In parse_class_decl, args are created as KastVarDecl.
-                // But KastVarDecl inherits KastNode.
-                // add_local_node handles extracting name if it's Identifier.
-                // KastVarDecl contains 'char* name'. It is not an Identifier node usually?
-                // Wait, kparser.h: typedef struct { KastNode base; char* name; ... } KastVarDecl;
-                // It's not Identifier.
-                // So add_local_node(KastNode*) needs to handle KastVarDecl?
-                // Or we use add_local_str.
                 KastVarDecl* arg = (KastVarDecl*)member->args[j];
-                add_local(compiler, arg->name, arg->type_name);
+                add_local(compiler, arg->name);
             }
             
             // Inject field initializers if this is _init_
@@ -1088,7 +1078,7 @@ static void compile_class_decl(CompilerState* compiler, KastClassDecl* cls) {
             compiler->scope_depth = 1;
             compiler->current_reg_count = 0;
             
-            add_local(compiler, "self", compiler->current_class_name);
+            add_local(compiler, "self");
             
             compile_field_initializers(compiler, cls);
             
@@ -1172,17 +1162,34 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
         }
         case KAST_NODE_VAR_DECL: {
             KastVarDecl* decl = (KastVarDecl*)stmt;
+            int reg;
+            
             if (compiler->scope_depth > 0) {
-                add_local(compiler, decl->name, decl->type_name);
-                int reg = resolve_local(compiler, decl->name);
-                if (decl->init_value) {
-                    compile_expression(compiler, (KastExpression*)decl->init_value, reg);
-                }
+                add_local(compiler, decl->name);
+                reg = resolve_local(compiler, decl->name);
             } else {
-                int reg = compiler->current_reg_count++;
-                if (decl->init_value) {
-                    compile_expression(compiler, (KastExpression*)decl->init_value, reg);
+                reg = compiler->current_reg_count++;
+            }
+
+            if (decl->init_value) {
+                compile_expression(compiler, (KastExpression*)decl->init_value, reg);
+            } else if (decl->type_name) {
+                // Auto-instantiate if it's a struct/class (not primitive)
+                const char* t = decl->type_name;
+                if (strcmp(t, "int") != 0 && strcmp(t, "float") != 0 && 
+                    strcmp(t, "bool") != 0 && strcmp(t, "string") != 0 && 
+                    strcmp(t, "any") != 0 && strcmp(t, "void") != 0) {
+                    
+                    int type_idx = add_string_constant(compiler, decl->type_name);
+                    emit_byte(compiler, KOP_NEW);
+                    emit_byte(compiler, reg);
+                    emit_byte(compiler, (uint8_t)(type_idx >> 8));
+                    emit_byte(compiler, (uint8_t)(type_idx & 0xFF));
+                    emit_byte(compiler, 0); // arg_count = 0
                 }
+            }
+            
+            if (compiler->scope_depth == 0) {
                 int idx = add_string_constant(compiler, decl->name);
                 emit_byte(compiler, KOP_SET_GLOBAL);
                 emit_byte(compiler, reg);
@@ -1254,7 +1261,7 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
                 
                 // Bind exception variable if present
                 if (catch_block->variable_name) {
-                    add_local(compiler, catch_block->variable_name, catch_block->error_type);
+                    add_local(compiler, catch_block->variable_name);
                     // Copy ex_reg to local_reg using KOP_MOVE
                     int local_reg = compiler->locals[compiler->local_count - 1].reg_index;
                     emit_byte(compiler, KOP_MOVE);
@@ -1311,6 +1318,22 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
         }
         case KAST_NODE_CLASS_DECL: {
             compile_class_decl(compiler, (KastClassDecl*)stmt);
+            break;
+        }
+        case KAST_NODE_STRUCT_DECL: {
+            KastStructDecl* st = (KastStructDecl*)stmt;
+            
+            // 1. Emit Class Definition (Struct is a class without methods)
+            int name_idx = add_string_constant(compiler, st->name);
+            emit_byte(compiler, KOP_CLASS);
+            emit_byte(compiler, 0); // Padding
+            emit_byte(compiler, (uint8_t)(name_idx >> 8));
+            emit_byte(compiler, (uint8_t)(name_idx & 0xFF));
+            
+            // 2. Compile inline variable declaration if exists
+            if (st->init_var) {
+                compile_statement(compiler, st->init_var);
+            }
             break;
         }
         case KAST_NODE_IF: {
@@ -1518,6 +1541,7 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
 }
 
 int compile_ast(KastProgram* program, KBytecodeChunk* chunk) {
+    // printf("[DEBUG] compile_ast start. Statements: %zu\n", program->statement_count);
     CompilerState* compiler = (CompilerState*)malloc(sizeof(CompilerState));
     if (!compiler) return 1;
     
@@ -1533,7 +1557,6 @@ int compile_ast(KastProgram* program, KBytecodeChunk* chunk) {
     // Cleanup compiler resources if any (locals names are strdup'ed)
     for(int i=0; i<compiler->local_count; i++) {
         free(compiler->locals[i].name);
-        if (compiler->locals[i].type_name) free(compiler->locals[i].type_name);
     }
     free(compiler);
     

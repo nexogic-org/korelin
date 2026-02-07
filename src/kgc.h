@@ -18,6 +18,10 @@ typedef struct KGC {
     size_t next_gc_threshold; // 觸發下一次 GC 的閾值
     KVM* vm;                  // 反向引用 VM 以獲取根 (Roots)
     
+#ifdef _WIN32
+    void* heap_handle;        // Windows 私有堆句柄 (HANDLE)
+#endif
+
     // 統計信息
     size_t gc_count;          // GC 觸發次數
 } KGC;

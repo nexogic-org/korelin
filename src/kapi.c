@@ -44,12 +44,7 @@ static void register_native(const char* name, void* func) {
     if (!g_current_vm) return;
     
     // Create Native Object
-    KObjNative* native = (KObjNative*)malloc(sizeof(KObjNative));
-    native->header.type = OBJ_NATIVE;
-    native->header.marked = false;
-    native->header.next = g_current_vm->objects;
-    native->header.size = sizeof(KObjNative);
-    g_current_vm->objects = (KObjHeader*)native;
+    KObjNative* native = (KObjNative*)kgc_alloc(g_current_vm->gc, sizeof(KObjNative), OBJ_NATIVE);
     
     native->function = (NativeFunc)func;
     native->name = strdup(name);
@@ -107,12 +102,7 @@ void KLibNew(const char* package_name) {
     if (!g_current_vm) return;
     
     // Create a new Instance object to represent the module
-    KObjInstance* module = (KObjInstance*)malloc(sizeof(KObjInstance));
-    module->header.type = OBJ_CLASS_INSTANCE;
-    module->header.marked = false;
-    module->header.next = g_current_vm->objects;
-    module->header.size = sizeof(KObjInstance);
-    g_current_vm->objects = (KObjHeader*)module;
+    KObjInstance* module = (KObjInstance*)kgc_alloc(g_current_vm->gc, sizeof(KObjInstance), OBJ_CLASS_INSTANCE);
     
     module->klass = NULL; // No class definition for raw modules
     // Initialize fields table
@@ -143,12 +133,7 @@ void KLibAdd(const char* package_name, const char* type, const char* name, void*
     KObjInstance* module = (KObjInstance*)module_val.as.obj;
     
     // Create Native Function Object
-    KObjNative* native = (KObjNative*)malloc(sizeof(KObjNative));
-    native->header.type = OBJ_NATIVE;
-    native->header.marked = false;
-    native->header.next = g_current_vm->objects;
-    native->header.size = sizeof(KObjNative);
-    g_current_vm->objects = (KObjHeader*)native;
+    KObjNative* native = (KObjNative*)kgc_alloc(g_current_vm->gc, sizeof(KObjNative), OBJ_NATIVE);
     
     native->function = (NativeFunc)value;
     native->name = strdup(name);
@@ -164,12 +149,7 @@ void KLibAdd(const char* package_name, const char* type, const char* name, void*
 void KLibNewClass(const char* class_name) {
     if (!g_current_vm) return;
     
-    KObjClass* klass = (KObjClass*)malloc(sizeof(KObjClass));
-    klass->header.type = OBJ_CLASS;
-    klass->header.marked = false;
-    klass->header.next = g_current_vm->objects;
-    klass->header.size = sizeof(KObjClass);
-    g_current_vm->objects = (KObjHeader*)klass;
+    KObjClass* klass = (KObjClass*)kgc_alloc(g_current_vm->gc, sizeof(KObjClass), OBJ_CLASS);
     
     klass->name = strdup(class_name);
     klass->parent = NULL;
@@ -197,7 +177,7 @@ void KLibAddMethod(const char* class_name, const char* method_name, void* func) 
     KObjClass* klass = (KObjClass*)class_val.as.obj;
     
     // Create Native Function
-    KObjNative* native = (KObjNative*)malloc(sizeof(KObjNative));
+    KObjNative* native = (KObjNative*)kgc_alloc(g_current_vm->gc, sizeof(KObjNative), OBJ_NATIVE);
     native->header.type = OBJ_NATIVE;
     native->header.marked = false;
     native->header.next = g_current_vm->objects;
@@ -218,12 +198,7 @@ void KLibAddGlobal(const char* name, void* func) {
     if (!g_current_vm) return;
     
     // Create Native Function
-    KObjNative* native = (KObjNative*)malloc(sizeof(KObjNative));
-    native->header.type = OBJ_NATIVE;
-    native->header.marked = false;
-    native->header.next = g_current_vm->objects;
-    native->header.size = sizeof(KObjNative);
-    g_current_vm->objects = (KObjHeader*)native;
+    KObjNative* native = (KObjNative*)kgc_alloc(g_current_vm->gc, sizeof(KObjNative), OBJ_NATIVE);
     
     native->function = (NativeFunc)func;
     native->name = strdup(name);
@@ -296,12 +271,7 @@ void KReturnString(const char* s) {
      if (!g_current_vm) return;
      
      // Create String Object
-     KObjString* str = (KObjString*)malloc(sizeof(KObjString));
-     str->header.type = OBJ_STRING;
-     str->header.marked = false;
-     str->header.next = g_current_vm->objects;
-     str->header.size = sizeof(KObjString) + strlen(s) + 1;
-     g_current_vm->objects = (KObjHeader*)str;
+     KObjString* str = (KObjString*)kgc_alloc(g_current_vm->gc, sizeof(KObjString), OBJ_STRING);
      
      str->length = strlen(s);
      str->chars = strdup(s);

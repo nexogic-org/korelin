@@ -1,0 +1,10 @@
+import os;
+
+int main() {
+    os.println("Starting GC Test...");
+    for (var i = 0; i < 10000; i = i + 1) {
+        var s = "iteration " + i;
+    }
+    os.println("GC Test Done");
+    return 0;
+}

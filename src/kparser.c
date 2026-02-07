@@ -1706,18 +1706,21 @@ static KastStatement* parse_struct_declaration(Parser* parser) {
     char* struct_name = strdup(parser->current_token.value);
     advance_token(parser);
     
-    consume(parser, KORELIN_TOKEN_LBRACE, "Expected '{'");
-    
-    KastStructDecl* struct_node = (KastStructDecl*)malloc(sizeof(KastStructDecl));
-    struct_node->base.type = KAST_NODE_STRUCT_DECL;
-    struct_node->name = struct_name;
-    struct_node->members = NULL;
-    struct_node->member_count = 0;
-    struct_node->init_var = NULL;
-    
-    size_t capacity = 0;
-    
-    while (!check_token(parser, KORELIN_TOKEN_RBRACE) && !check_token(parser, KORELIN_TOKEN_EOF)) {
+    // Check if it is a definition '{' or variable declaration 'varName'
+    if (check_token(parser, KORELIN_TOKEN_LBRACE)) {
+        // --- Struct Definition ---
+        advance_token(parser); // Consume '{'
+        
+        KastStructDecl* struct_node = (KastStructDecl*)malloc(sizeof(KastStructDecl));
+        struct_node->base.type = KAST_NODE_STRUCT_DECL;
+        struct_node->name = struct_name;
+        struct_node->members = NULL;
+        struct_node->member_count = 0;
+        struct_node->init_var = NULL;
+        
+        size_t capacity = 0;
+        
+        while (!check_token(parser, KORELIN_TOKEN_RBRACE) && !check_token(parser, KORELIN_TOKEN_EOF)) {
         // Struct members are implicitly public (usually) and just fields
         // For simplicity, we reuse KastClassMember but ensure it's a property
         
@@ -1791,14 +1794,47 @@ static KastStatement* parse_struct_declaration(Parser* parser) {
         // Check for array declaration: struct S { ... } s[];
         if (check_token(parser, KORELIN_TOKEN_LBRACKET)) {
             advance_token(parser);
+            
+            KastNode* size_expr = NULL;
+            if (!check_token(parser, KORELIN_TOKEN_RBRACKET)) {
+                size_expr = parse_expression(parser);
+            }
+            
             consume(parser, KORELIN_TOKEN_RBRACKET, "Expected ']'");
             var_decl->is_array = true;
+            
+            // Create init value: new StructName[size]
+            KastNew* init_new = (KastNew*)malloc(sizeof(KastNew));
+            init_new->base.type = KAST_NODE_NEW;
+            init_new->class_name = strdup(struct_name);
+            init_new->is_array = true;
+            if (size_expr) {
+                init_new->arg_count = 1;
+                init_new->args = (KastNode**)malloc(sizeof(KastNode*));
+                init_new->args[0] = size_expr;
+            } else {
+                 // Error: Array declaration requires size in this context or handle dynamic?
+                 // C requires size for stack array. Let's assume size required.
+                 parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Array size required for struct array declaration");
+                 init_new->arg_count = 0;
+                 init_new->args = NULL;
+            }
+            var_decl->init_value = (KastNode*)init_new;
+            
         } else {
             var_decl->is_array = false;
+            // Create init value: new StructName()
+            KastNew* init_new = (KastNew*)malloc(sizeof(KastNew));
+            init_new->base.type = KAST_NODE_NEW;
+            init_new->class_name = strdup(struct_name);
+            init_new->is_array = false;
+            init_new->arg_count = 0;
+            init_new->args = NULL;
+            var_decl->init_value = (KastNode*)init_new;
         }
 
         var_decl->name = var_name;
-        var_decl->init_value = NULL; // No init value provided syntax-wise
+        // var_decl->init_value was NULL before
         
         struct_node->init_var = (KastStatement*)var_decl;
         
@@ -1814,6 +1850,57 @@ static KastStatement* parse_struct_declaration(Parser* parser) {
     }
     
     return (KastStatement*)struct_node;
+    
+    } else if (check_token(parser, KORELIN_TOKEN_IDENT)) {
+        // --- Struct Variable Declaration: struct Point p; ---
+        char* var_name = strdup(parser->current_token.value);
+        advance_token(parser);
+        
+        bool is_array = false;
+        KastNode* size_expr = NULL;
+        
+        if (check_token(parser, KORELIN_TOKEN_LBRACKET)) {
+            advance_token(parser);
+            if (!check_token(parser, KORELIN_TOKEN_RBRACKET)) {
+                size_expr = parse_expression(parser);
+            }
+            consume(parser, KORELIN_TOKEN_RBRACKET, "Expected ']'");
+            is_array = true;
+        }
+        
+        consume(parser, KORELIN_TOKEN_SEMICOLON, "Expected ';'");
+        
+        KastVarDecl* var_decl = (KastVarDecl*)malloc(sizeof(KastVarDecl));
+        var_decl->base.type = KAST_NODE_VAR_DECL;
+        var_decl->is_global = false; // Will be determined by compiler scope
+        var_decl->is_constant = false;
+        var_decl->type_name = struct_name; // reused
+        var_decl->name = var_name;
+        var_decl->is_array = is_array;
+        
+        // Create init value: new StructName() or new StructName[size]
+        KastNew* init_new = (KastNew*)malloc(sizeof(KastNew));
+        init_new->base.type = KAST_NODE_NEW;
+        init_new->class_name = strdup(struct_name);
+        init_new->is_array = is_array;
+        
+        if (is_array && size_expr) {
+            init_new->arg_count = 1;
+            init_new->args = (KastNode**)malloc(sizeof(KastNode*));
+            init_new->args[0] = size_expr;
+        } else {
+            init_new->arg_count = 0;
+            init_new->args = NULL;
+        }
+        var_decl->init_value = (KastNode*)init_new;
+        
+        return (KastStatement*)var_decl;
+        
+    } else {
+        parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected '{' for struct definition or identifier for variable declaration");
+        free(struct_name);
+        return NULL;
+    }
 }
 
 static KastStatement* parse_import_statement(Parser* parser) {
@@ -1892,6 +1979,10 @@ static KastStatement* parse_statement(Parser* parser) {
         return parse_import_statement(parser);
     }
 
+    if (check_token(parser, KORELIN_TOKEN_STRUCT)) {
+        return parse_struct_declaration(parser);
+    }
+
     if (check_token(parser, KORELIN_TOKEN_FUNCTION)) {
         advance_token(parser);
         char* type_name = parse_type_definition(parser);
@@ -1962,11 +2053,7 @@ static KastStatement* parse_statement(Parser* parser) {
     }
 
     if (check_token(parser, KORELIN_TOKEN_STRUCT)) {
-        // Check if it is a struct definition (struct Name {)
-        if (parser->peek_token.type == KORELIN_TOKEN_IDENT && parser->peek_token_2.type == KORELIN_TOKEN_LBRACE) {
-            return parse_struct_declaration(parser);
-        }
-        // Otherwise treat as variable declaration (struct Name var;)
+        return parse_struct_declaration(parser);
     }
 
     // 尝试解析类型化的声明 (函数或变量)
