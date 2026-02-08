@@ -1,13 +1,12 @@
-//
-// Created by Helix on 2026/1/21.
-//
 #include "kcode.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "kconst.h" 
 
-// --- Internal Structures ---
+/**
+ * @brief 內部結構定義
+ */
 
 typedef struct {
     char* name;
@@ -37,14 +36,18 @@ typedef struct {
     int loop_depth;
 } CompilerState;
 
-// --- Forward Declarations ---
+/**
+ * @brief 前向聲明
+ */
 
 static void compile_statement(CompilerState* compiler, KastStatement* stmt);
 static void compile_expression(CompilerState* compiler, KastExpression* expr, int target_reg);
 static int add_string_constant(CompilerState* compiler, const char* str);
 static void patch_jump(CompilerState* compiler, int offset, int target);
 
-// --- Chunk Management ---
+/**
+ * @brief 字節碼塊管理
+ */
 
 void init_chunk(KBytecodeChunk* chunk) {
     chunk->count = 0;
@@ -286,6 +289,72 @@ static void compile_expression(CompilerState* compiler, KastExpression* expr, in
             }
             break;
         }
+        case KAST_NODE_ARRAY_LITERAL: {
+            KastArrayLiteral* lit = (KastArrayLiteral*)expr;
+            
+            // 1. Create Size Register
+            int size_reg = compiler->current_reg_count++;
+            
+            // 2. Load Size
+            if (lit->element_count <= 127) {
+                emit_byte(compiler, KOP_LDI);
+                emit_byte(compiler, size_reg);
+                emit_byte(compiler, (int8_t)lit->element_count);
+                emit_byte(compiler, 0);
+            } else {
+                 emit_byte(compiler, KOP_LDI64);
+                 emit_byte(compiler, size_reg);
+                 // 8 bytes 
+                 long long val = lit->element_count;
+                 for(int i=0; i<8; i++) {
+                     emit_byte(compiler, (uint8_t)((val >> ((7-i)*8)) & 0xFF));
+                 }
+            }
+
+            // 3. Create Array (NEWA)
+            // Use "any" as type for now
+            int type_idx = add_string_constant(compiler, "any");
+            
+            emit_byte(compiler, KOP_NEWA);
+            emit_byte(compiler, target_reg);
+            emit_byte(compiler, size_reg);
+            emit_byte(compiler, (uint8_t)(type_idx >> 8));
+            emit_byte(compiler, (uint8_t)(type_idx & 0xFF));
+            
+            compiler->current_reg_count--; // Free size_reg
+            
+            // 4. Populate Elements
+            for (int i=0; i<lit->element_count; i++) {
+                // Compile value to temp reg
+                int val_reg = compiler->current_reg_count++;
+                compile_expression(compiler, (KastExpression*)lit->elements[i], val_reg);
+                
+                // Load Index
+                int idx_reg = compiler->current_reg_count++;
+                if (i <= 127) {
+                    emit_byte(compiler, KOP_LDI);
+                    emit_byte(compiler, idx_reg);
+                    emit_byte(compiler, (int8_t)i);
+                    emit_byte(compiler, 0);
+                } else {
+                     emit_byte(compiler, KOP_LDI64);
+                     emit_byte(compiler, idx_reg);
+                     long long val = i;
+                     for(int k=0; k<8; k++) {
+                         emit_byte(compiler, (uint8_t)((val >> ((7-k)*8)) & 0xFF));
+                     }
+                }
+                
+                // PUTFA Target(Arr), Idx, Val
+                emit_byte(compiler, KOP_PUTFA);
+                emit_byte(compiler, target_reg);
+                emit_byte(compiler, idx_reg);
+                emit_byte(compiler, val_reg);
+                
+                compiler->current_reg_count -= 2; // Free val_reg, idx_reg
+            }
+            break;
+        }
         case KAST_NODE_IDENTIFIER: {
             KastIdentifier* ident = (KastIdentifier*)expr;
             int reg = resolve_local(compiler, ident->name);
@@ -321,6 +390,8 @@ static void compile_expression(CompilerState* compiler, KastExpression* expr, in
                 case KORELIN_TOKEN_LE: op = KOP_LE; break;
                 case KORELIN_TOKEN_GT: op = KOP_GT; break;
                 case KORELIN_TOKEN_GE: op = KOP_GE; break;
+                case KORELIN_TOKEN_AND: op = KOP_AND; break;
+                case KORELIN_TOKEN_OR: op = KOP_OR; break;
                 default: break;
             }
             
@@ -569,10 +640,13 @@ static void compile_expression(CompilerState* compiler, KastExpression* expr, in
                 int size_reg = compiler->current_reg_count++;
                 compile_expression(compiler, (KastExpression*)n->args[0], size_reg);
                 
+                int type_idx = add_string_constant(compiler, n->class_name);
+                
                 emit_byte(compiler, KOP_NEWA);
                 emit_byte(compiler, target_reg);
                 emit_byte(compiler, size_reg);
-                emit_byte(compiler, 0); // Padding
+                emit_byte(compiler, (uint8_t)(type_idx >> 8));
+                emit_byte(compiler, (uint8_t)(type_idx & 0xFF));
                 
                 compiler->current_reg_count--;
             } else {
@@ -1093,17 +1167,34 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
         }
         case KAST_NODE_VAR_DECL: {
             KastVarDecl* decl = (KastVarDecl*)stmt;
+            int reg;
+            
             if (compiler->scope_depth > 0) {
                 add_local(compiler, decl->name);
-                int reg = resolve_local(compiler, decl->name);
-                if (decl->init_value) {
-                    compile_expression(compiler, (KastExpression*)decl->init_value, reg);
-                }
+                reg = resolve_local(compiler, decl->name);
             } else {
-                int reg = compiler->current_reg_count++;
-                if (decl->init_value) {
-                    compile_expression(compiler, (KastExpression*)decl->init_value, reg);
+                reg = compiler->current_reg_count++;
+            }
+
+            if (decl->init_value) {
+                compile_expression(compiler, (KastExpression*)decl->init_value, reg);
+            } else if (decl->type_name) {
+                // Auto-instantiate if it's a struct/class (not primitive)
+                const char* t = decl->type_name;
+                if (strcmp(t, "int") != 0 && strcmp(t, "float") != 0 && 
+                    strcmp(t, "bool") != 0 && strcmp(t, "string") != 0 && 
+                    strcmp(t, "any") != 0 && strcmp(t, "void") != 0) {
+                    
+                    int type_idx = add_string_constant(compiler, decl->type_name);
+                    emit_byte(compiler, KOP_NEW);
+                    emit_byte(compiler, reg);
+                    emit_byte(compiler, (uint8_t)(type_idx >> 8));
+                    emit_byte(compiler, (uint8_t)(type_idx & 0xFF));
+                    emit_byte(compiler, 0); // arg_count = 0
                 }
+            }
+            
+            if (compiler->scope_depth == 0) {
                 int idx = add_string_constant(compiler, decl->name);
                 emit_byte(compiler, KOP_SET_GLOBAL);
                 emit_byte(compiler, reg);
@@ -1221,8 +1312,22 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
         }
         case KAST_NODE_BLOCK: {
             KastBlock* block = (KastBlock*)stmt;
+            compiler->scope_depth++; // Enter scope
             for (size_t i = 0; i < block->statement_count; i++) {
                 compile_statement(compiler, block->statements[i]);
+            }
+            compiler->scope_depth--; // Exit scope
+            
+            // Pop locals defined in this scope
+            while (compiler->local_count > 0 && 
+                   compiler->locals[compiler->local_count - 1].depth > compiler->scope_depth) {
+                // For register-based VM, we effectively free the register by decrementing count
+                // provided the local was at the top.
+                // In this simple register allocator, locals are allocated sequentially.
+                // So popping the last local frees the last register.
+                compiler->current_reg_count--;
+                free(compiler->locals[compiler->local_count - 1].name);
+                compiler->local_count--;
             }
             break;
         }
@@ -1232,6 +1337,22 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
         }
         case KAST_NODE_CLASS_DECL: {
             compile_class_decl(compiler, (KastClassDecl*)stmt);
+            break;
+        }
+        case KAST_NODE_STRUCT_DECL: {
+            KastStructDecl* st = (KastStructDecl*)stmt;
+            
+            // 1. Emit Class Definition (Struct is a class without methods)
+            int name_idx = add_string_constant(compiler, st->name);
+            emit_byte(compiler, KOP_CLASS);
+            emit_byte(compiler, 0); // Padding
+            emit_byte(compiler, (uint8_t)(name_idx >> 8));
+            emit_byte(compiler, (uint8_t)(name_idx & 0xFF));
+            
+            // 2. Compile inline variable declaration if exists
+            if (st->init_var) {
+                compile_statement(compiler, st->init_var);
+            }
             break;
         }
         case KAST_NODE_IF: {
@@ -1439,6 +1560,7 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
 }
 
 int compile_ast(KastProgram* program, KBytecodeChunk* chunk) {
+    // printf("[DEBUG] compile_ast start. Statements: %zu\n", program->statement_count);
     CompilerState* compiler = (CompilerState*)malloc(sizeof(CompilerState));
     if (!compiler) return 1;
     

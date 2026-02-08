@@ -1,7 +1,3 @@
-//
-// Created by Helix on 2026/1/21.
-//
-
 #include "keditor.h"
 #include "klex.h"
 #include "kparser.h"
@@ -28,7 +24,7 @@
     #include <sys/types.h>
 #endif
 
-// --- 定義與常量 ---
+/** @brief 定義與常量 */
 
 #define KEDITOR_VERSION "0.1.0"
 #define KEDITOR_TAB_STOP 4
@@ -49,19 +45,19 @@ enum editorKey {
     PAGE_DOWN
 };
 
-// --- 數據結構 ---
+/** @brief 數據結構 */
 
 typedef struct {
     char* chars;
     int len;
-    int render_len; // 考慮 Tab 等
+    int render_len; /**< 考慮 Tab 等 */
 } ERow;
 
 typedef struct {
-    int cx, cy; // 光標在文件中的位置 (x: 列, y: 行)
-    int rx;     // 光標在渲染行的位置 (處理 Tab)
-    int rowoff; // 行滾動偏移
-    int coloff; // 列滾動偏移
+    int cx, cy; /**< 光標在文件中的位置 (x: 列, y: 行) */
+    int rx;     /**< 光標在渲染行的位置 (處理 Tab) */
+    int rowoff; /**< 行滾動偏移 */
+    int coloff; /**< 列滾動偏移 */
     int screen_rows;
     int screen_cols;
     
@@ -85,7 +81,7 @@ static DWORD originalConsoleMode;
 static struct termios orig_termios;
 #endif
 
-// --- Append Buffer ---
+/** @brief Append Buffer */
 
 struct abuf {
     char *b;
@@ -106,14 +102,14 @@ void abFree(struct abuf *ab) {
     free(ab->b);
 }
 
-// --- 輔助函數聲明 ---
+/** @brief 輔助函數聲明 */
 void editorSetStatusMessage(const char* fmt, ...);
 void editorRefreshScreen();
 char* editorRowsToString(int* buflen);
 void editorSave();
 void editorRun();
 
-// --- 終端控制 (跨平台) ---
+/** @brief 終端控制 (跨平台) */
 
 void die(const char *s) {
     // 清屏並退出

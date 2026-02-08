@@ -1,13 +1,9 @@
-//
-// Created by Helix on 2026/1/11.
-//
-
 #include "kcache.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// 輔助函數：寫入字符串
+/** @brief 輔助函數：寫入字符串 */
 static int write_string(FILE* fp, const char* str) {
     if (!str) {
         uint32_t len = 0;
@@ -24,7 +20,7 @@ static int write_string(FILE* fp, const char* str) {
     return 0;
 }
 
-// 輔助函數：讀取字符串
+/** @brief 輔助函數：讀取字符串 */
 static char* read_string(FILE* fp) {
     uint32_t len;
     if (fread(&len, sizeof(len), 1, fp) != 1) return NULL;
@@ -57,9 +53,9 @@ int kcache_save(const char* filename, KBytecodeChunk* chunk, uint64_t source_tim
     header.timestamp = source_timestamp;
     header.source_size = source_size;
     
-    header.code_size = (uint32_t)chunk->count; // 字節碼實際字節數
+    header.code_size = (uint32_t)chunk->count; /**< 字節碼實際字節數 */
     header.string_count = (uint32_t)chunk->string_count;
-    header.lines_size = (uint32_t)(chunk->count * sizeof(int)); // lines 數組大小通常與 code count 一致
+    header.lines_size = (uint32_t)(chunk->count * sizeof(int)); /**< lines 數組大小通常與 code count 一致 */
 
     // 1. 寫入頭部
     if (fwrite(&header, sizeof(header), 1, fp) != 1) {
@@ -110,17 +106,17 @@ int kcache_load(const char* filename, KBytecodeChunk* chunk, uint64_t source_tim
     // 驗證魔數和版本
     if (header.magic != KCACHE_MAGIC || header.version != KCACHE_VERSION) {
         fclose(fp);
-        return 1; // 格式無效或版本不匹配
+        return 1; /**< 格式無效或版本不匹配 */
     }
 
     // 驗證源文件一致性 (如果提供了 timestamp/size)
     if (source_timestamp != 0 && header.timestamp != source_timestamp) {
         fclose(fp);
-        return 1; // 緩存過期
+        return 1; /**< 緩存過期 */
     }
     if (source_size != 0 && header.source_size != source_size) {
         fclose(fp);
-        return 1; // 緩存過期
+        return 1; /**< 緩存過期 */
     }
 
     // 開始加載數據
@@ -129,7 +125,7 @@ int kcache_load(const char* filename, KBytecodeChunk* chunk, uint64_t source_tim
 
     // 1. 加載字節碼
     if (header.code_size > 0) {
-        chunk->capacity = header.code_size; // 精確分配
+        chunk->capacity = header.code_size; /**< 精確分配 */
         chunk->count = header.code_size;
         chunk->code = (uint8_t*)malloc(chunk->capacity);
         if (!chunk->code) { fclose(fp); return -1; }

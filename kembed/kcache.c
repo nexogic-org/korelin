@@ -8,6 +8,7 @@
 #include <string.h>
 
 // 輔助函數：寫入字符串
+/** @brief 輔助函數：寫入字符串 */
 static int write_string(FILE* fp, const char* str) {
     if (!str) {
         uint32_t len = 0;
@@ -25,6 +26,7 @@ static int write_string(FILE* fp, const char* str) {
 }
 
 // 輔助函數：讀取字符串
+/** @brief 輔助函數：讀取字符串 */
 static char* read_string(FILE* fp) {
     uint32_t len;
     if (fread(&len, sizeof(len), 1, fp) != 1) return NULL;
@@ -108,12 +110,14 @@ int kcache_load(const char* filename, KBytecodeChunk* chunk, uint64_t source_tim
     }
 
     // 驗證魔數和版本
+    /** @brief 驗證魔數和版本 */
     if (header.magic != KCACHE_MAGIC || header.version != KCACHE_VERSION) {
         fclose(fp);
         return 1; // 格式無效或版本不匹配
     }
 
     // 驗證源文件一致性 (如果提供了 timestamp/size)
+    /** @brief 驗證源文件一致性 (如果提供了 timestamp/size) */
     if (source_timestamp != 0 && header.timestamp != source_timestamp) {
         fclose(fp);
         return 1; // 緩存過期
@@ -124,8 +128,11 @@ int kcache_load(const char* filename, KBytecodeChunk* chunk, uint64_t source_tim
     }
 
     // 開始加載數據
+    /** @brief 開始加載數據 */
     // 確保 chunk 已初始化（通常調用者已調用 init_chunk）
+    /** @brief 確保 chunk 已初始化（通常調用者已調用 init_chunk） */
     // 我們需要根據 header 分配內存
+    /** @brief 我們需要根據 header 分配內存 */
 
     // 1. 加載字節碼
     if (header.code_size > 0) {
@@ -166,6 +173,7 @@ int kcache_load(const char* filename, KBytecodeChunk* chunk, uint64_t source_tim
     }
 
     // 3. 加載字符串常量池
+    /** @brief 3. 加載字符串常量池 */
     if (header.string_count > 0) {
         chunk->string_count = header.string_count;
         chunk->string_table = (char**)malloc(header.string_count * sizeof(char*));

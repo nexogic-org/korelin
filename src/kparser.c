@@ -30,10 +30,8 @@ const char* get_error_name(KorelinErrorType type) {
 }
 
 // --- 前置聲明 ---
-static bool is_keyword(KorelinToken type);
 static void advance_token(Parser* parser);
 static KastStatement* parse_statement(Parser* parser);
-static void synchronize(Parser* parser);
 static KastStatement* parse_var_declaration(Parser* parser);
 static KastBlock* parse_block(Parser* parser); // 新增
 static KastStatement* parse_try_catch(Parser* parser);
@@ -46,70 +44,9 @@ static KastNode* parse_expression(Parser* parser);
 static KastNode* parse_literal(Parser* parser);
 
 // 報告錯誤
-static int levenshtein_distance(const char *s1, const char *s2) {
-    int len1 = strlen(s1);
-    int len2 = strlen(s2);
-    
-    // Allocate matrix
-    int *matrix = malloc((len1 + 1) * (len2 + 1) * sizeof(int));
-    if (!matrix) return len1 > len2 ? len1 : len2; // Fallback
-
-    #define M(i, j) matrix[(i) * (len2 + 1) + (j)]
-
-    for (int i = 0; i <= len1; i++) M(i, 0) = i;
-    for (int j = 0; j <= len2; j++) M(0, j) = j;
-
-    for (int i = 1; i <= len1; i++) {
-        for (int j = 1; j <= len2; j++) {
-            int cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
-            int delete_op = M(i - 1, j) + 1;
-            int insert_op = M(i, j - 1) + 1;
-            int sub_op = M(i - 1, j - 1) + cost;
-            
-            int min = delete_op < insert_op ? delete_op : insert_op;
-            if (sub_op < min) min = sub_op;
-            
-            M(i, j) = min;
-        }
-    }
-    
-    int result = M(len1, len2);
-    free(matrix);
-    #undef M
-    return result;
-}
-
-static const char* KEYWORDS[] = {
-    "let", "function", "var", "const", "if", "else", "for", "while", "do", "return",
-    "try", "catch", "import", "struct", "true", "false", "nil", "break", "continue",
-    "switch", "case", "default", "class", "Map", "public", "private", "protected",
-    "extends", "super", "new", "void", "int", "float", "bool", "string", NULL
-};
-
-static const char* get_suggestion(const char* wrong_word) {
-    if (!wrong_word || strlen(wrong_word) < 2) return NULL;
-    
-    const char* best_match = NULL;
-    int min_dist = 100;
-    
-    for (int i = 0; KEYWORDS[i] != NULL; i++) {
-        int dist = levenshtein_distance(wrong_word, KEYWORDS[i]);
-        if (dist < min_dist && dist <= 3) { // Threshold 3
-            min_dist = dist;
-            best_match = KEYWORDS[i];
-        }
-    }
-    return best_match;
-}
-
 static void parser_error(Parser* parser, KorelinErrorType type, const char* format, ...) {
     if (parser->panic_mode) return; // Already in panic mode
-    
-    // Don't panic for missing semicolon, to allow reporting subsequent errors
-    if (type != KORELIN_ERROR_MISSING_SEMICOLON) {
-        parser->panic_mode = true;
-    }
-
+    parser->panic_mode = true;
     parser->has_error = true;
     parser->error_type = type;
 
@@ -118,66 +55,8 @@ static void parser_error(Parser* parser, KorelinErrorType type, const char* form
     vsnprintf(parser->error_message, sizeof(parser->error_message), format, args);
     va_end(args);
 
-    // ANSI Color Codes
-    const char* COLOR_RED = "\033[31m";
-    const char* COLOR_RESET = "\033[0m";
-    const char* COLOR_GRAY = "\033[90m";
-    const char* COLOR_BOLD = "\033[1m";
-    const char* COLOR_CYAN = "\033[36m";
-
-    // Get Line Info
-    Token* err_token = &parser->current_token;
-    // If missing semicolon and we moved to next line, use previous token
-    if (type == KORELIN_ERROR_MISSING_SEMICOLON && parser->previous_token.line < parser->current_token.line && parser->previous_token.line > 0) {
-        err_token = &parser->previous_token;
-    }
-    
-    int line = err_token->line;
-    int col = err_token->column;
-    
-    // Fallback if line is 0 (start)
-    if (line == 0) line = 1;
-
-    // Get Line Content from Source
-    const char* source = parser->lexer->input;
-    const char* line_start = source;
-    int current_line = 1;
-    while (current_line < line && *line_start) {
-        if (*line_start == '\n') current_line++;
-        line_start++;
-    }
-    const char* line_end = line_start;
-    while (*line_end && *line_end != '\n') line_end++;
-    
-    int line_len = line_end - line_start;
-    char* line_content = (char*)malloc(line_len + 1);
-    strncpy(line_content, line_start, line_len);
-    line_content[line_len] = '\0';
-
-    // Print Formatted Error
-    fprintf(stderr, "\n%s[%s] %s%s\n", COLOR_RED, get_error_name(type), parser->error_message, COLOR_RESET);
-    
-    // Did you mean?
-    if (err_token->type == KORELIN_TOKEN_IDENT || 
-        err_token->type == KORELIN_TOKEN_ERROR) { // Sometimes lexer marks unknown chars as ERROR
-        const char* token_val = err_token->value;
-        // If error message mentions "Unknown word", or similar, we check suggestion
-        // Or just always check if token matches a keyword closely
-        const char* suggestion = get_suggestion(token_val);
-        if (suggestion) {
-             fprintf(stderr, "%s Did you mean '%s'?%s\n", COLOR_CYAN, suggestion, COLOR_RESET);
-        }
-    }
-
-    // Print Source Line with Line Number
-    fprintf(stderr, "\n%s%4d | %s%s\n", COLOR_GRAY, line, COLOR_RESET, line_content);
-    
-    // Print Pointer
-    fprintf(stderr, "%s     | ", COLOR_GRAY);
-    for (int i = 0; i < col; i++) fprintf(stderr, " ");
-    fprintf(stderr, "%s^%s\n\n", COLOR_RED, COLOR_RESET);
-
-    free(line_content);
+    // Note: No line number info in Token struct yet
+    fprintf(stderr, "[%s] %s\n", get_error_name(type), parser->error_message);
 }
 
 // --- Forward Declarations ---
@@ -195,14 +74,6 @@ void init_parser(Parser* parser, Lexer* lexer) {
     parser->error_type = KORELIN_NO_ERROR;
     parser->error_message[0] = '\0';
     parser->has_main_function = false;
-    
-    // Init previous token to EOF or empty
-    parser->previous_token.type = KORELIN_TOKEN_EOF;
-    parser->previous_token.value = NULL;
-    parser->previous_token.length = 0;
-    parser->previous_token.line = 0;
-    parser->previous_token.column = 0;
-
     // Read 6 tokens for lookahead
     parser->current_token = next_token(lexer);
     parser->peek_token = next_token(lexer);
@@ -213,11 +84,8 @@ void init_parser(Parser* parser, Lexer* lexer) {
 }
 
 static void advance_token(Parser* parser) {
-    // 釋放之前的 previous_token 內存
-    free_token(&parser->previous_token);
-    
-    // Move current to previous
-    parser->previous_token = parser->current_token;
+    // 釋放之前的 current_token 內存
+    free_token(&parser->current_token);
 
     parser->current_token = parser->peek_token;
     parser->peek_token = parser->peek_token_2;
@@ -427,46 +295,7 @@ static KastNode* parse_literal(Parser* parser) {
     return (KastNode*)node;
 }
 
-static KastNode* parse_array_literal(Parser* parser) {
-    consume(parser, KORELIN_TOKEN_LBRACKET, "Expected '['");
-    
-    KastNode** elements = NULL;
-    size_t count = 0;
-    size_t capacity = 0;
-    
-    if (!check_token(parser, KORELIN_TOKEN_RBRACKET)) {
-        while (!check_token(parser, KORELIN_TOKEN_RBRACKET) && !check_token(parser, KORELIN_TOKEN_EOF)) {
-            KastNode* elem = parse_expression(parser);
-            if (elem) {
-                if (count >= capacity) {
-                    capacity = capacity == 0 ? 4 : capacity * 2;
-                    elements = (KastNode**)realloc(elements, capacity * sizeof(KastNode*));
-                }
-                elements[count++] = elem;
-            }
-            
-            if (check_token(parser, KORELIN_TOKEN_COMMA)) {
-                advance_token(parser);
-            } else {
-                break;
-            }
-        }
-    }
-    
-    consume(parser, KORELIN_TOKEN_RBRACKET, "Expected ']'");
-    
-    KastArrayLiteral* node = (KastArrayLiteral*)malloc(sizeof(KastArrayLiteral));
-    node->base.type = KAST_NODE_ARRAY_LITERAL;
-    node->elements = elements;
-    node->element_count = count;
-    return (KastNode*)node;
-}
-
 static KastNode* parse_primary(Parser* parser) {
-    if (check_token(parser, KORELIN_TOKEN_LBRACKET)) {
-        return parse_array_literal(parser);
-    }
-
     if (check_token(parser, KORELIN_TOKEN_LPAREN)) {
         advance_token(parser);
         KastNode* expr = parse_expression(parser);
@@ -592,54 +421,15 @@ static KastNode* parse_primary(Parser* parser) {
         return parse_literal(parser);
     }
 
-    // Super Call: super(args) - used in constructor
+    KastNode* current = NULL;
+
     if (check_token(parser, KORELIN_TOKEN_SUPER)) {
-        // Treat as function call expression essentially, but with "super" as callee
-        // For simplicity, we can create a Call expression where callee is Identifier("super")
-        // or a special Super node. Let's reuse Identifier for now.
-        
         KastIdentifier* ident = (KastIdentifier*)malloc(sizeof(KastIdentifier));
         ident->base.type = KAST_NODE_IDENTIFIER;
         ident->name = strdup("super");
-        advance_token(parser); // consume super
-        
-        // Expect (
-        if (check_token(parser, KORELIN_TOKEN_LPAREN)) {
-            advance_token(parser);
-            
-            KastCall* call = (KastCall*)malloc(sizeof(KastCall));
-            call->base.type = KAST_NODE_CALL;
-            call->callee = (KastNode*)ident;
-            call->args = NULL;
-            call->arg_count = 0;
-            
-            if (!check_token(parser, KORELIN_TOKEN_RPAREN)) {
-                size_t capacity = 0;
-                while (!check_token(parser, KORELIN_TOKEN_RPAREN) && !check_token(parser, KORELIN_TOKEN_EOF)) {
-                    KastNode* arg = parse_expression(parser);
-                    if (arg) {
-                        if (call->arg_count >= capacity) {
-                            capacity = capacity == 0 ? 2 : capacity * 2;
-                            call->args = (KastNode**)realloc(call->args, capacity * sizeof(KastNode*));
-                        }
-                        call->args[call->arg_count++] = arg;
-                    }
-                    if (check_token(parser, KORELIN_TOKEN_COMMA)) advance_token(parser);
-                    else break;
-                }
-            }
-            consume(parser, KORELIN_TOKEN_RPAREN, "Expected ')'");
-            return (KastNode*)call;
-        } else {
-             // super.method() ?
-             // If we just return 'super' identifier, the member access parser logic should handle it if it follows.
-             return (KastNode*)ident;
-        }
-    }
-
-    if (check_token(parser, KORELIN_TOKEN_IDENT) || check_token(parser, KORELIN_TOKEN_KEYWORD_STRING)) {
-         KastNode* current = NULL;
-         
+        advance_token(parser);
+        current = (KastNode*)ident;
+    } else if (check_token(parser, KORELIN_TOKEN_IDENT) || check_token(parser, KORELIN_TOKEN_KEYWORD_STRING)) {
          // Check for Class::Member (Static access)
          if (parser->peek_token.type == KORELIN_TOKEN_SCOPE) {
               char* class_name = strdup(parser->current_token.value);
@@ -665,12 +455,38 @@ static KastNode* parse_primary(Parser* parser) {
               advance_token(parser);
               current = (KastNode*)node;
          }
-         
-         // Check for member access (obj.member) or Call (func()) or Array Access (arr[index])
-           while (check_token(parser, KORELIN_TOKEN_DOT) || check_token(parser, KORELIN_TOKEN_LPAREN) || check_token(parser, KORELIN_TOKEN_LBRACKET)) {
-               if (check_token(parser, KORELIN_TOKEN_DOT)) {
+    }
+
+    if (current) {
+         // Check for member access (obj.member) or Call (func()) or Array Access (arr[index]) or Postfix (i++)
+           while (check_token(parser, KORELIN_TOKEN_DOT) || 
+                  check_token(parser, KORELIN_TOKEN_LPAREN) || 
+                  check_token(parser, KORELIN_TOKEN_LBRACKET) ||
+                  check_token(parser, KORELIN_TOKEN_INC) ||
+                  check_token(parser, KORELIN_TOKEN_DEC)) {
+               
+               if (check_token(parser, KORELIN_TOKEN_INC) || check_token(parser, KORELIN_TOKEN_DEC)) {
+                   KorelinToken op = parser->current_token.type;
                    advance_token(parser);
-                   if (!check_token(parser, KORELIN_TOKEN_IDENT) && !is_keyword(parser->current_token.type)) {
+                   
+                   KastPostfixOp* post = (KastPostfixOp*)malloc(sizeof(KastPostfixOp));
+                   post->base.type = KAST_NODE_POSTFIX_OP;
+                   post->operator = op;
+                   post->operand = current;
+                   current = (KastNode*)post;
+               } else if (check_token(parser, KORELIN_TOKEN_DOT)) {
+                   advance_token(parser);
+                   
+                   // Allow keywords as member names (e.g. os.int, os.string)
+                   bool is_valid_member = false;
+                   if (check_token(parser, KORELIN_TOKEN_IDENT)) is_valid_member = true;
+                   else if (check_token(parser, KORELIN_TOKEN_INT)) is_valid_member = true;
+                   else if (check_token(parser, KORELIN_TOKEN_FLOAT)) is_valid_member = true;
+                   else if (check_token(parser, KORELIN_TOKEN_BOOL)) is_valid_member = true;
+                   else if (check_token(parser, KORELIN_TOKEN_KEYWORD_STRING)) is_valid_member = true;
+                   else if (check_token(parser, KORELIN_TOKEN_VOID)) is_valid_member = true;
+                   
+                   if (!is_valid_member) {
                         parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected member name");
                         return current;
                    }
@@ -782,14 +598,23 @@ static KastBlock* parse_block(Parser* parser) {
                 block->statements = (KastStatement**)realloc(block->statements, capacity * sizeof(KastStatement*));
             }
             block->statements[block->statement_count++] = stmt;
-        } 
-        
-        if (parser->panic_mode) {
-            synchronize(parser);
+        } else {
+             // 塊內語句解析失敗，簡單的同步邏輯
+             if (parser->panic_mode) {
+                while (!check_token(parser, KORELIN_TOKEN_SEMICOLON) && 
+                       !check_token(parser, KORELIN_TOKEN_RBRACE) && 
+                       !check_token(parser, KORELIN_TOKEN_EOF)) {
+                    advance_token(parser);
+                }
+                if (check_token(parser, KORELIN_TOKEN_SEMICOLON)) {
+                    advance_token(parser);
+                }
+                parser->panic_mode = false;
+            }
         }
     }
 
-    consume(parser, KORELIN_TOKEN_RBRACE, "Block expects '}'");
+    consume(parser, KORELIN_TOKEN_RBRACE, "代码块Expected '}'");
     if (parser->panic_mode) {
         // 這裏需要釋放已解析的語句
         for (size_t i = 0; i < block->statement_count; i++) {
@@ -839,16 +664,23 @@ static KastStatement* parse_try_catch(Parser* parser) {
         
         char* error_type = strdup(parser->current_token.value);
         advance_token(parser);
+        
+        // Optional variable name
+        char* var_name = NULL;
+        if (check_token(parser, KORELIN_TOKEN_IDENT)) {
+             var_name = strdup(parser->current_token.value);
+             advance_token(parser);
+        }
 
         consume(parser, KORELIN_TOKEN_RPAREN, "Catch block expects ')'");
         if (parser->panic_mode) { 
-            free(error_type); free_ast_node((KastNode*)stmt); return NULL; 
+            free(error_type); if(var_name) free(var_name); free_ast_node((KastNode*)stmt); return NULL; 
         }
 
         // 解析 catch 代碼塊
         KastBlock* catch_body = parse_block(parser);
         if (catch_body == NULL) {
-             free(error_type); free_ast_node((KastNode*)stmt); return NULL;
+             free(error_type); if(var_name) free(var_name); free_ast_node((KastNode*)stmt); return NULL;
         }
 
         // 添加到數組
@@ -857,6 +689,7 @@ static KastStatement* parse_try_catch(Parser* parser) {
             stmt->catch_blocks = (KorelinCatchBlock*)realloc(stmt->catch_blocks, capacity * sizeof(KorelinCatchBlock));
         }
         stmt->catch_blocks[stmt->catch_count].error_type = error_type;
+        stmt->catch_blocks[stmt->catch_count].variable_name = var_name;
         stmt->catch_blocks[stmt->catch_count].body = catch_body;
         stmt->catch_count++;
     }
@@ -864,11 +697,6 @@ static KastStatement* parse_try_catch(Parser* parser) {
     return (KastStatement*)stmt;
 }
 
-static bool is_keyword(KorelinToken type) {
-    return (type >= KORELIN_TOKEN_LET && type <= KORELIN_TOKEN_NEW) ||
-           (type >= KORELIN_TOKEN_KEYWORD_STRING && type <= KORELIN_TOKEN_VOID) ||
-           type == KORELIN_TOKEN_TRUE || type == KORELIN_TOKEN_FALSE || type == KORELIN_TOKEN_NIL;
-}
 
 // 解析類型定義 (Type Definition)
 // 支持: int, MyClass, int[], MyClass[], Map<K,V>, Array<T>
@@ -932,8 +760,8 @@ static KastStatement* parse_function_declaration(Parser* parser, char* return_ty
     func->body = body;
     func->generic_params = generic_params;
     func->generic_count = generic_count;
-    func->parent_class_name = NULL;
     func->access = KAST_ACCESS_PUBLIC;
+    func->parent_class_name = NULL;
     
     return (KastStatement*)func;
 }
@@ -1037,16 +865,8 @@ static KastStatement* parse_typed_declaration(Parser* parser) {
 static char* parse_type_definition(Parser* parser) {
     char* type_name = NULL;
     
-    // 1. 基礎類型或標識符
-    if (check_token(parser, KORELIN_TOKEN_STRUCT)) {
-        advance_token(parser); // struct
-        if (!check_token(parser, KORELIN_TOKEN_IDENT)) {
-            parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected struct name");
-            return NULL;
-        }
-        type_name = strdup(parser->current_token.value);
-        advance_token(parser);
-    } else if (check_token(parser, KORELIN_TOKEN_IDENT) || 
+    // 1. 基礎類型或標識符 (支持 dotted names: std.io.File)
+    if (check_token(parser, KORELIN_TOKEN_IDENT) || 
         (parser->current_token.type >= KORELIN_TOKEN_KEYWORD_STRING && parser->current_token.type <= KORELIN_TOKEN_BOOL) ||
         parser->current_token.type == KORELIN_TOKEN_VOID) {
         
@@ -1620,9 +1440,11 @@ static KastStatement* parse_for_statement(Parser* parser) {
 }
 
 // --- While 循环解析 ---
+// 语法: while (condition) { ... }
 static KastStatement* parse_while_statement(Parser* parser) {
     consume(parser, KORELIN_TOKEN_WHILE, "Expected 'while'");
     consume(parser, KORELIN_TOKEN_LPAREN, "Expected '('");
+    
     KastNode* condition = parse_expression(parser);
     consume(parser, KORELIN_TOKEN_RPAREN, "Expected ')'");
     
@@ -1636,12 +1458,15 @@ static KastStatement* parse_while_statement(Parser* parser) {
 }
 
 // --- Do-While 循环解析 ---
+// 语法: do { ... } while (condition);
 static KastStatement* parse_do_while_statement(Parser* parser) {
     consume(parser, KORELIN_TOKEN_DO, "Expected 'do'");
+    
     KastStatement* body = parse_statement(parser);
     
     consume(parser, KORELIN_TOKEN_WHILE, "Expected 'while'");
     consume(parser, KORELIN_TOKEN_LPAREN, "Expected '('");
+    
     KastNode* condition = parse_expression(parser);
     consume(parser, KORELIN_TOKEN_RPAREN, "Expected ')'");
     consume(parser, KORELIN_TOKEN_SEMICOLON, "Expected ';'");
@@ -1685,17 +1510,6 @@ static KastStatement* parse_continue_statement(Parser* parser) {
     return (KastStatement*)stmt;
 }
 
-static KastStatement* parse_throw_statement(Parser* parser) {
-    consume(parser, KORELIN_TOKEN_THROW, "Expected 'throw'");
-    KastNode* value = parse_expression(parser);
-    consume(parser, KORELIN_TOKEN_SEMICOLON, "Expected ';'");
-    
-    KastThrow* stmt = (KastThrow*)malloc(sizeof(KastThrow));
-    stmt->base.type = KAST_NODE_THROW;
-    stmt->value = value;
-    return (KastStatement*)stmt;
-}
-
 // --- Struct 解析 ---
 static KastStatement* parse_struct_declaration(Parser* parser) {
     consume(parser, KORELIN_TOKEN_STRUCT, "Expected 'struct'");
@@ -1706,21 +1520,18 @@ static KastStatement* parse_struct_declaration(Parser* parser) {
     char* struct_name = strdup(parser->current_token.value);
     advance_token(parser);
     
-    // Check if it is a definition '{' or variable declaration 'varName'
-    if (check_token(parser, KORELIN_TOKEN_LBRACE)) {
-        // --- Struct Definition ---
-        advance_token(parser); // Consume '{'
-        
-        KastStructDecl* struct_node = (KastStructDecl*)malloc(sizeof(KastStructDecl));
-        struct_node->base.type = KAST_NODE_STRUCT_DECL;
-        struct_node->name = struct_name;
-        struct_node->members = NULL;
-        struct_node->member_count = 0;
-        struct_node->init_var = NULL;
-        
-        size_t capacity = 0;
-        
-        while (!check_token(parser, KORELIN_TOKEN_RBRACE) && !check_token(parser, KORELIN_TOKEN_EOF)) {
+    consume(parser, KORELIN_TOKEN_LBRACE, "Expected '{'");
+    
+    KastStructDecl* struct_node = (KastStructDecl*)malloc(sizeof(KastStructDecl));
+    struct_node->base.type = KAST_NODE_STRUCT_DECL;
+    struct_node->name = struct_name;
+    struct_node->members = NULL;
+    struct_node->member_count = 0;
+    struct_node->init_var = NULL;
+    
+    size_t capacity = 0;
+    
+    while (!check_token(parser, KORELIN_TOKEN_RBRACE) && !check_token(parser, KORELIN_TOKEN_EOF)) {
         // Struct members are implicitly public (usually) and just fields
         // For simplicity, we reuse KastClassMember but ensure it's a property
         
@@ -1794,47 +1605,14 @@ static KastStatement* parse_struct_declaration(Parser* parser) {
         // Check for array declaration: struct S { ... } s[];
         if (check_token(parser, KORELIN_TOKEN_LBRACKET)) {
             advance_token(parser);
-            
-            KastNode* size_expr = NULL;
-            if (!check_token(parser, KORELIN_TOKEN_RBRACKET)) {
-                size_expr = parse_expression(parser);
-            }
-            
             consume(parser, KORELIN_TOKEN_RBRACKET, "Expected ']'");
             var_decl->is_array = true;
-            
-            // Create init value: new StructName[size]
-            KastNew* init_new = (KastNew*)malloc(sizeof(KastNew));
-            init_new->base.type = KAST_NODE_NEW;
-            init_new->class_name = strdup(struct_name);
-            init_new->is_array = true;
-            if (size_expr) {
-                init_new->arg_count = 1;
-                init_new->args = (KastNode**)malloc(sizeof(KastNode*));
-                init_new->args[0] = size_expr;
-            } else {
-                 // Error: Array declaration requires size in this context or handle dynamic?
-                 // C requires size for stack array. Let's assume size required.
-                 parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Array size required for struct array declaration");
-                 init_new->arg_count = 0;
-                 init_new->args = NULL;
-            }
-            var_decl->init_value = (KastNode*)init_new;
-            
         } else {
             var_decl->is_array = false;
-            // Create init value: new StructName()
-            KastNew* init_new = (KastNew*)malloc(sizeof(KastNew));
-            init_new->base.type = KAST_NODE_NEW;
-            init_new->class_name = strdup(struct_name);
-            init_new->is_array = false;
-            init_new->arg_count = 0;
-            init_new->args = NULL;
-            var_decl->init_value = (KastNode*)init_new;
         }
 
         var_decl->name = var_name;
-        // var_decl->init_value was NULL before
+        var_decl->init_value = NULL; // No init value provided syntax-wise
         
         struct_node->init_var = (KastStatement*)var_decl;
         
@@ -1850,57 +1628,6 @@ static KastStatement* parse_struct_declaration(Parser* parser) {
     }
     
     return (KastStatement*)struct_node;
-    
-    } else if (check_token(parser, KORELIN_TOKEN_IDENT)) {
-        // --- Struct Variable Declaration: struct Point p; ---
-        char* var_name = strdup(parser->current_token.value);
-        advance_token(parser);
-        
-        bool is_array = false;
-        KastNode* size_expr = NULL;
-        
-        if (check_token(parser, KORELIN_TOKEN_LBRACKET)) {
-            advance_token(parser);
-            if (!check_token(parser, KORELIN_TOKEN_RBRACKET)) {
-                size_expr = parse_expression(parser);
-            }
-            consume(parser, KORELIN_TOKEN_RBRACKET, "Expected ']'");
-            is_array = true;
-        }
-        
-        consume(parser, KORELIN_TOKEN_SEMICOLON, "Expected ';'");
-        
-        KastVarDecl* var_decl = (KastVarDecl*)malloc(sizeof(KastVarDecl));
-        var_decl->base.type = KAST_NODE_VAR_DECL;
-        var_decl->is_global = false; // Will be determined by compiler scope
-        var_decl->is_constant = false;
-        var_decl->type_name = struct_name; // reused
-        var_decl->name = var_name;
-        var_decl->is_array = is_array;
-        
-        // Create init value: new StructName() or new StructName[size]
-        KastNew* init_new = (KastNew*)malloc(sizeof(KastNew));
-        init_new->base.type = KAST_NODE_NEW;
-        init_new->class_name = strdup(struct_name);
-        init_new->is_array = is_array;
-        
-        if (is_array && size_expr) {
-            init_new->arg_count = 1;
-            init_new->args = (KastNode**)malloc(sizeof(KastNode*));
-            init_new->args[0] = size_expr;
-        } else {
-            init_new->arg_count = 0;
-            init_new->args = NULL;
-        }
-        var_decl->init_value = (KastNode*)init_new;
-        
-        return (KastStatement*)var_decl;
-        
-    } else {
-        parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected '{' for struct definition or identifier for variable declaration");
-        free(struct_name);
-        return NULL;
-    }
 }
 
 static KastStatement* parse_import_statement(Parser* parser) {
@@ -1949,55 +1676,15 @@ static KastStatement* parse_import_statement(Parser* parser) {
     return (KastStatement*)import_node;
 }
 
-static void synchronize(Parser* parser) {
-    parser->panic_mode = false;
-
-    while (parser->current_token.type != KORELIN_TOKEN_EOF) {
-        if (parser->previous_token.type == KORELIN_TOKEN_SEMICOLON) return;
-
-        switch (parser->current_token.type) {
-            case KORELIN_TOKEN_CLASS:
-            case KORELIN_TOKEN_FUNCTION:
-            case KORELIN_TOKEN_VAR:
-            case KORELIN_TOKEN_LET:
-            case KORELIN_TOKEN_FOR:
-            case KORELIN_TOKEN_IF:
-            case KORELIN_TOKEN_WHILE:
-            case KORELIN_TOKEN_RETURN:
-            case KORELIN_TOKEN_IMPORT:
-                return;
-            default:
-                ;
-        }
-
-        advance_token(parser);
-    }
-}
-
 static KastStatement* parse_statement(Parser* parser) {
     if (check_token(parser, KORELIN_TOKEN_IMPORT)) {
         return parse_import_statement(parser);
     }
 
-    if (check_token(parser, KORELIN_TOKEN_STRUCT)) {
-        return parse_struct_declaration(parser);
-    }
-
     if (check_token(parser, KORELIN_TOKEN_FUNCTION)) {
+        parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Keyword 'function' is not supported. Use type-first declaration (e.g., 'void funcName()').");
         advance_token(parser);
-        char* type_name = parse_type_definition(parser);
-        if (!type_name) {
-             parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected return type after 'function'");
-             return NULL;
-        }
-        if (!check_token(parser, KORELIN_TOKEN_IDENT)) {
-             parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected function name");
-             free(type_name);
-             return NULL;
-        }
-        char* name = strdup(parser->current_token.value);
-        advance_token(parser);
-        return parse_function_declaration(parser, type_name, name);
+        return NULL;
     }
 
     if (check_token(parser, KORELIN_TOKEN_VAR) || check_token(parser, KORELIN_TOKEN_LET)) {
@@ -2006,6 +1693,17 @@ static KastStatement* parse_statement(Parser* parser) {
     
     if (check_token(parser, KORELIN_TOKEN_TRY)) {
         return parse_try_catch(parser);
+    }
+    
+    if (check_token(parser, KORELIN_TOKEN_THROW)) {
+        advance_token(parser);
+        KastNode* expr = parse_expression(parser);
+        consume(parser, KORELIN_TOKEN_SEMICOLON, "Expected ';'");
+        
+        KastThrow* node = (KastThrow*)malloc(sizeof(KastThrow));
+        node->base.type = KAST_NODE_THROW;
+        node->value = expr;
+        return (KastStatement*)node;
     }
     
     if (check_token(parser, KORELIN_TOKEN_IF)) {
@@ -2040,10 +1738,6 @@ static KastStatement* parse_statement(Parser* parser) {
         return parse_continue_statement(parser);
     }
 
-    if (check_token(parser, KORELIN_TOKEN_THROW)) {
-        return parse_throw_statement(parser);
-    }
-
     if (check_token(parser, KORELIN_TOKEN_LBRACE)) {
         return (KastStatement*)parse_block(parser);
     }
@@ -2057,11 +1751,11 @@ static KastStatement* parse_statement(Parser* parser) {
     }
 
     // 尝试解析类型化的声明 (函数或变量)
-    // 启发式判断：以类型开头 (基础类型, Map, 或 标识符+标识符/泛型/数组, 或 struct)
+    // 启发式判断：以类型开头 (基础类型, Map, 或 标识符+标识符/泛型/数组)
     bool is_decl = false;
     KorelinToken t = parser->current_token.type;
     
-    if (t == KORELIN_TOKEN_MAP || t == KORELIN_TOKEN_STRUCT) {
+    if (t == KORELIN_TOKEN_MAP) {
         is_decl = true;
     } else if ((t >= KORELIN_TOKEN_INT && t <= KORELIN_TOKEN_BOOL) || t == KORELIN_TOKEN_VOID || t == KORELIN_TOKEN_KEYWORD_STRING) {
         // 基础类型后跟标识符或数组
@@ -2111,7 +1805,20 @@ static KastStatement* parse_statement(Parser* parser) {
                if (is_definition) {
                    char* class_name = strdup(parser->current_token.value);
                    advance_token(parser); // Class
+                   
+                   // Ensure we consume ::
+                   if (!check_token(parser, KORELIN_TOKEN_SCOPE)) {
+                       parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected '::'");
+                       free(class_name);
+                       return NULL;
+                   }
                    advance_token(parser); // ::
+                   
+                   if (!check_token(parser, KORELIN_TOKEN_IDENT)) {
+                       parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected method name");
+                       free(class_name);
+                       return NULL;
+                   }
                    char* method_name = strdup(parser->current_token.value);
                    advance_token(parser); // Method
                    
@@ -2185,6 +1892,30 @@ static KastStatement* parse_class_declaration(Parser* parser) {
     char* class_name = strdup(parser->current_token.value);
     advance_token(parser);
     
+    // Generics
+    char** generic_params = NULL;
+    size_t generic_count = 0;
+    
+    if (check_token(parser, KORELIN_TOKEN_LT)) {
+        advance_token(parser);
+        while (!check_token(parser, KORELIN_TOKEN_GT) && !check_token(parser, KORELIN_TOKEN_EOF)) {
+            if (!check_token(parser, KORELIN_TOKEN_IDENT)) {
+                parser_error(parser, KORELIN_ERROR_ILLEGAL_SYNTAX, "Expected generic parameter name");
+                break;
+            }
+            char* param_name = strdup(parser->current_token.value);
+            advance_token(parser);
+            
+            generic_params = (char**)realloc(generic_params, (generic_count + 1) * sizeof(char*));
+            generic_params[generic_count++] = param_name;
+            
+            if (check_token(parser, KORELIN_TOKEN_COMMA)) {
+                advance_token(parser);
+            }
+        }
+        consume(parser, KORELIN_TOKEN_GT, "Expected '>' after generic parameters");
+    }
+    
     char* parent_name = NULL;
     if (check_token(parser, KORELIN_TOKEN_EXTENDS)) {
         advance_token(parser);
@@ -2205,6 +1936,8 @@ static KastStatement* parse_class_declaration(Parser* parser) {
     class_node->parent_name = parent_name;
     class_node->members = NULL;
     class_node->member_count = 0;
+    class_node->generic_params = generic_params;
+    class_node->generic_count = generic_count;
     
     size_t capacity = 0;
     
@@ -2520,8 +2253,8 @@ case KAST_NODE_FOR: {
         }
         case KAST_NODE_DO_WHILE: {
             KastDoWhile* stmt = (KastDoWhile*)node;
-            if (stmt->condition) free_ast_node(stmt->condition);
             if (stmt->body) free_ast_node((KastNode*)stmt->body);
+            if (stmt->condition) free_ast_node(stmt->condition);
             break;
         }
         case KAST_NODE_CLASS_DECL: {
@@ -2595,14 +2328,6 @@ case KAST_NODE_FOR: {
             if (acc->index) free_ast_node(acc->index);
             break;
         }
-        case KAST_NODE_ARRAY_LITERAL: {
-            KastArrayLiteral* lit = (KastArrayLiteral*)node;
-            for (size_t i = 0; i < lit->element_count; i++) {
-                free_ast_node(lit->elements[i]);
-            }
-            if (lit->elements) free(lit->elements);
-            break;
-        }
         case KAST_NODE_BINARY_OP: {
             KastBinaryOp* op = (KastBinaryOp*)node;
             if (op->left) free_ast_node(op->left);
@@ -2611,6 +2336,11 @@ case KAST_NODE_FOR: {
         }
         case KAST_NODE_UNARY_OP: {
             KastUnaryOp* op = (KastUnaryOp*)node;
+            if (op->operand) free_ast_node(op->operand);
+            break;
+        }
+        case KAST_NODE_POSTFIX_OP: {
+            KastPostfixOp* op = (KastPostfixOp*)node;
             if (op->operand) free_ast_node(op->operand);
             break;
         }

@@ -1,7 +1,3 @@
-//
-// Created by Helix on 2026/1/10.
-//
-
 #ifndef KORELIN_KVM_H
 #define KORELIN_KVM_H
 
@@ -16,19 +12,20 @@ typedef struct ComeOnJIT ComeOnJIT;
 
 #define MAX_NATIVE_ARGS 16
 
-// --- 類型定義 ---
-
+/**
+ * @brief 值類型枚舉
+ */
 typedef enum {
     VAL_NULL,
     VAL_BOOL,
     VAL_INT,
     VAL_FLOAT,
     VAL_DOUBLE,
-    VAL_OBJ, // Object pointer
-    VAL_STRING // String pointer
+    VAL_OBJ,    /**< 對象指針 */
+    VAL_STRING  /**< 字符串指針 */
 } KValueType;
 
-// --- Object Structures ---
+/* --- Object Structures --- */
 typedef enum {
     OBJ_STRING,
     OBJ_STRUCT,
@@ -37,10 +34,13 @@ typedef enum {
     OBJ_ARRAY,
     OBJ_FUNCTION,
     OBJ_UPVALUE,
-    OBJ_NATIVE, // Native C Function
+    OBJ_NATIVE,      /**< Native C Function */
     OBJ_BOUND_METHOD
 } KObjType;
 
+/**
+ * @brief 對象頭部 (GC 使用)
+ */
 typedef struct KObjHeader {
     struct KObjHeader* next;
     bool marked;
@@ -48,16 +48,23 @@ typedef struct KObjHeader {
     size_t size;
 } KObjHeader;
 
-// Native Function Type
+/**
+ * @brief 本地函數類型
+ */
 typedef void (*NativeFunc)();
 
+/**
+ * @brief 本地函數對象
+ */
 typedef struct {
     KObjHeader header;
     NativeFunc function;
     char* name;
 } KObjNative;
 
-// String Object
+/**
+ * @brief 字符串對象
+ */
 typedef struct {
     KObjHeader header;
     char* chars;
@@ -65,12 +72,16 @@ typedef struct {
     uint32_t hash;
 } KObjString;
 
-// Generic Object Wrapper
+/**
+ * @brief 通用對象包裝器
+ */
 typedef struct {
     KObjHeader header;
 } KObj;
 
-// --- Value Definition ---
+/**
+ * @brief 值定義
+ */
 typedef struct KValue {
     KValueType type;
     union {
@@ -78,17 +89,22 @@ typedef struct KValue {
         int64_t integer;
         float single_prec;
         double double_prec;
-        void* obj; // Points to KObjHeader
+        void* obj; /**< 指向 KObjHeader */
         char* str;
     } as;
 } KValue;
 
-// --- Table (Hash Map) ---
+/**
+ * @brief 哈希表條目
+ */
 typedef struct {
     char* key;
     KValue value;
 } KTableEntry;
 
+/**
+ * @brief 哈希表 (Table)
+ */
 typedef struct {
     int count;
     int capacity;
@@ -100,18 +116,24 @@ void free_table(KTable* table);
 bool table_set(KTable* table, const char* key, KValue value);
 bool table_get(KTable* table, const char* key, KValue* value);
 
-// Forward Decl
+/**
+ * @brief 前置聲明
+ */
 struct KObjClass;
 struct KObjInstance;
 
-// Instance Object
+/**
+ * @brief 實例對象
+ */
 typedef struct KObjInstance {
     KObjHeader header;
     KTable fields;
     struct KObjClass* klass;
 } KObjInstance;
 
-// Class Object
+/**
+ * @brief 類對象
+ */
 typedef struct KObjClass {
     KObjHeader header;
     char* name;
@@ -119,31 +141,37 @@ typedef struct KObjClass {
     KTable methods;
 } KObjClass;
 
-// Function Object
+/**
+ * @brief 函數對象
+ */
 typedef struct {
     KObjHeader header;
     int arity;
-    KBytecodeChunk* chunk; // Changed to pointer
-    uint32_t entry_point; // Entry point in the chunk
+    KBytecodeChunk* chunk; /**< 指向字節碼塊 */
+    uint32_t entry_point;  /**< 字節碼塊中的入口點 */
     char* name;
-    int access; // 0: private, 1: protected, 2: public
+    int access;            /**< 0: private, 1: protected, 2: public */
     struct KObjClass* parent_class;
     struct KObjInstance* module;
 } KObjFunction;
 
-// Bound Method Object
+/**
+ * @brief 綁定方法對象
+ */
 typedef struct {
     KObjHeader header;
     KValue receiver;
     KObjFunction* method;
 } KObjBoundMethod;
 
-// --- Array Object ---
+/**
+ * @brief 數組對象
+ */
 typedef struct {
     KObjHeader header;
     int length;
     int capacity;
-    KValue* elements; // Pointer to KValue array
+    KValue* elements; /**< 指向 KValue 數組的指針 */
 } KObjArray;
 
 // --- VM Structure ---
@@ -152,14 +180,18 @@ typedef struct {
 #define KVM_MAX_FRAMES 64
 #define KVM_REGISTERS_MAX 256
 
-// Exception Frame
+/**
+ * @brief 異常幀
+ */
 typedef struct {
     uint8_t* handler_ip;
     int stack_depth;
     int frame_depth;
 } ExceptionFrame;
 
-// 調用幀 (Call Frame)
+/**
+ * @brief 調用幀 (Call Frame)
+ */
 typedef struct {
     KBytecodeChunk* chunk;
     uint8_t* ip;
@@ -170,70 +202,92 @@ typedef struct {
 } CallFrame;
 
 // --- VM Structure ---
+
+/**
+ * @brief 虛擬機結構體
+ */
 typedef struct KVM {
     KBytecodeChunk* chunk;
     uint8_t* ip;
     KValue* registers;
     KValue stack[KVM_STACK_SIZE];
     KValue* stack_top;
-    KValue* native_args; // Pointer to arguments for current native call
-    int native_argc; // Argument count for current native call
+    KValue* native_args; /**< 指向當前本地調用的參數的指針 */
+    int native_argc;     /**< 當前本地調用的參數數量 */
     
-    // Call Frames
+    /* 調用幀 */
     CallFrame frames[KVM_MAX_FRAMES];
     int frame_count;
     bool had_error;
     
-    // Exception Handling
+    /* 異常處理 */
     ExceptionFrame exception_frames[KVM_MAX_FRAMES];
     int exception_frame_count;
     KValue current_exception;
 
-    // GC Roots
-    KObjHeader* objects; // Linked list of all objects
+    /* GC 根 */
+    KObjHeader* objects; /**< 所有對象的鏈表 */
     KGC* gc;
 
-    // Globals
+    /* 全局變量 */
     KTable globals;
     
-    // Modules
+    /* 模塊 */
     KTable modules;
     KTable lib_paths;
     
-    // Import Callback
+    /* 導入回調 */
     KValue (*import_handler)(struct KVM* vm, const char* name);
     KObjInstance* current_module;
     
-    // Environment
+    /* 環境 */
     char* root_dir;
     
-    // JIT
+    /* JIT (即時編譯) */
     ComeOnJIT* jit;
 
 } KVM;
 
 // --- API ---
 
-// 初始化虛擬機
+/**
+ * @brief 初始化虛擬機
+ */
 void kvm_init(KVM* vm);
 
-// 釋放虛擬機資源
+/**
+ * @brief 釋放虛擬機資源
+ */
 void kvm_free(KVM* vm);
 
-// 解釋執行字節碼塊
+/**
+ * @brief 解釋執行字節碼塊
+ */
 int kvm_interpret(KVM* vm, KBytecodeChunk* chunk);
 
-// 運行 VM (低級接口)
+/**
+ * @brief 運行 VM (低級接口)
+ */
 int kvm_run(KVM* vm);
 
-// 輔助：打印值
+/**
+ * @brief 輔助：打印值
+ */
 void kvm_print_value(KValue value);
 
-// Call function
+/**
+ * @brief 調用函數
+ */
 bool kvm_call_function(KVM* vm, KObjFunction* function, int arg_count);
 
-// Stack Ops
+/**
+ * @brief 壓入棧
+ */
 void kvm_push(KVM* vm, KValue value);
+
+/**
+ * @brief 彈出棧
+ */
 KValue kvm_pop(KVM* vm);
 
 #endif //KORELIN_KVM_H

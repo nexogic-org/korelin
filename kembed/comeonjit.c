@@ -1,7 +1,3 @@
-//
-// Created by Helix on 2026/1/21.
-//
-
 #include "comeonjit.h"
 #include "kvm.h"
 #include <stdio.h>
@@ -15,12 +11,12 @@
 #include <unistd.h>
 #endif
 
-// --- 輔助宏 ---
+/** @brief 輔助宏定義 */
 
-// REX Prefix fields
+/** @brief REX 前綴字段 */
 #define REX_W 0x48 // 64-bit operand
 
-// x64 Registers
+/** @brief x64 寄存器 */
 #define RAX 0
 #define RCX 1
 #define RDX 2
@@ -30,18 +26,18 @@
 #define RSI 6
 #define RDI 7
 
-// KValue Offsets (Based on KVM struct)
+/** @brief KValue 偏移量 (基於 KVM 結構) */
 // type: offset 0 (4 bytes)
 // as: offset 8 (8 bytes)
 #define OFFSET_KVALUE_TYPE 0
 #define OFFSET_KVALUE_AS   8
 #define SIZE_KVALUE        16
 
-// KVM Offsets
+/** @brief KVM 偏移量 */
 // registers is the first field
 #define OFFSET_KVM_REGISTERS 0
 
-// --- 內存管理 ---
+/** @brief 內存管理 */
 
 void jit_init(ComeOnJIT* jit) {
     jit->enabled = true;
@@ -92,7 +88,7 @@ static uint8_t* jit_alloc(ComeOnJIT* jit, size_t size) {
     return ptr;
 }
 
-// --- x64 Emitter ---
+/** @brief x64 指令生成器 */
 
 #define EMIT_1(b1) *code++ = (b1)
 #define EMIT_2(b1, b2) { *code++ = (b1); *code++ = (b2); }
@@ -100,11 +96,11 @@ static uint8_t* jit_alloc(ComeOnJIT* jit, size_t size) {
 #define EMIT_4(b1, b2, b3, b4) { *code++ = (b1); *code++ = (b2); *code++ = (b3); *code++ = (b4); }
 #define EMIT_INT32(val) { *(int32_t*)code = (val); code += 4; }
 
-// ModR/M helper
+/** @brief ModR/M 輔助宏 */
 // mod: 2 bits, reg: 3 bits, rm: 3 bits
 #define MODRM(mod, reg, rm) ((mod << 6) | (reg << 3) | rm)
 
-// Load Register Value to CPU Register
+/** @brief 加載寄存器值到 CPU 寄存器 */
 // mov cpu_reg, [vm_base + OFFSET_REGISTERS + vm_reg_idx * 16 + 8]
 static void emit_load_reg(uint8_t** ptr, int cpu_reg, int vm_reg_idx, int vm_base_reg) {
     uint8_t* code = *ptr;
@@ -119,7 +115,7 @@ static void emit_load_reg(uint8_t** ptr, int cpu_reg, int vm_reg_idx, int vm_bas
     *ptr = code;
 }
 
-// Store CPU Register to VM Register
+/** @brief 存儲 CPU 寄存器值到 VM 寄存器 */
 // mov [vm_base + ... + 8], cpu_reg
 static void emit_store_reg(uint8_t** ptr, int cpu_reg, int vm_reg_idx, int vm_base_reg) {
     uint8_t* code = *ptr;
@@ -133,7 +129,7 @@ static void emit_store_reg(uint8_t** ptr, int cpu_reg, int vm_reg_idx, int vm_ba
     *ptr = code;
 }
 
-// Set VM Register Type to INT
+/** @brief 設置 VM 寄存器類型為 INT */
 // mov dword ptr [vm_base + ...], VAL_INT
 static void emit_set_type_int(uint8_t** ptr, int vm_reg_idx, int vm_base_reg) {
     uint8_t* code = *ptr;
@@ -148,43 +144,48 @@ static void emit_set_type_int(uint8_t** ptr, int vm_reg_idx, int vm_base_reg) {
     *ptr = code;
 }
 
-// --- JIT Compilation ---
+/** @brief JIT 編譯相關 */
 
-// Jump Fixup Structure
+/** @brief 跳轉修復結構體 */
 typedef struct {
-    int jump_inst_offset; // Offset in machine code where the relative jump starts
-    int target_bytecode_offset; // Target bytecode index
+    int jump_inst_offset; /**< 相對跳轉開始的機器碼偏移 */
+    int target_bytecode_offset; /**< 目標字節碼索引 */
 } JumpFixup;
 
+/**
+ * @brief JIT 編譯函數
+ * @param jit JIT 實例
+ * @param chunk 字節碼塊
+ * @return 編譯後的機器碼指針，失敗返回 NULL
+ */
 void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
     if (!jit->enabled || jit->arch != JIT_ARCH_X64) return NULL;
 
-    size_t max_size = chunk->count * 64 + 1024; // Conservative estimate
+    size_t max_size = chunk->count * 64 + 1024; /**< 保守估計大小 */
     uint8_t* start_addr = jit_alloc(jit, max_size);
     if (!start_addr) return NULL;
 
     uint8_t* code = start_addr;
     
-    // Map bytecode offset to machine code offset
-    // -1 means not yet generated
+    /** 映射字節碼偏移到機器碼偏移，-1 表示尚未生成 */
     int* bc_to_mc = (int*)malloc(chunk->count * sizeof(int));
     for(size_t i=0; i<chunk->count; i++) bc_to_mc[i] = -1;
 
-    // Jump fixups
-    JumpFixup fixups[256]; // Simple fixed size for demo
+    /** 跳轉修復 */
+    JumpFixup fixups[256]; /**< 簡單固定大小用於演示 */
     int fixup_count = 0;
 
-    // Determine VM pointer register
+    /** 確定 VM 指針寄存器 */
 #ifdef _WIN32
-    int vm_reg = RCX; // Windows: 1st arg in RCX
+    int vm_reg = RCX; /**< Windows: 第1個參數在 RCX */
 #else
-    int vm_reg = RDI; // SysV: 1st arg in RDI
+    int vm_reg = RDI; /**< SysV: 第1個參數在 RDI */
 #endif
 
-    // Prologue
-    EMIT_1(0x55); // push rbp
-    EMIT_3(0x48, 0x89, 0xE5); // mov rbp, rsp
-    EMIT_1(0x53); // push rbx (callee saved)
+    /** 函數序言 (Prologue) */
+    EMIT_1(0x55); /**< push rbp */
+    EMIT_3(0x48, 0x89, 0xE5); /**< mov rbp, rsp */
+    EMIT_1(0x53); /**< push rbx (callee saved) */
 
     uint8_t* ip = chunk->code;
     uint8_t* end = chunk->code + chunk->count;
@@ -197,37 +198,37 @@ void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
 
         switch (opcode) {
             case KOP_HALT:
-                EMIT_1(0xB8); EMIT_INT32(0); // mov eax, 0
-                EMIT_1(0x5B); // pop rbx
-                EMIT_1(0xC9); // leave
-                EMIT_1(0xC3); // ret
+                EMIT_1(0xB8); EMIT_INT32(0); /**< mov eax, 0 */
+                EMIT_1(0x5B); /**< pop rbx */
+                EMIT_1(0xC9); /**< leave */
+                EMIT_1(0xC3); /**< ret */
                 break;
 
-            case KOP_ADDI: { // ADDI Rd, Ra, Imm
+            case KOP_ADDI: { /**< ADDI Rd, Ra, Imm */
                 uint8_t rd = *ip++;
                 uint8_t ra = *ip++;
                 int8_t imm = (int8_t)(*ip++);
                 
-                // Load Ra -> RAX
+                /** Load Ra -> RAX */
                 emit_load_reg(&code, RAX, ra, vm_reg);
-                // ADD RAX, Imm
+                /** ADD RAX, Imm */
                 EMIT_1(REX_W); EMIT_1(0x83); EMIT_1(0xC0); EMIT_1((uint8_t)imm);
-                // Store RAX -> Rd
+                /** Store RAX -> Rd */
                 emit_store_reg(&code, RAX, rd, vm_reg);
-                // Set Type
+                /** Set Type */
                 emit_set_type_int(&code, rd, vm_reg);
                 break;
             }
 
-            case KOP_ADD: { // ADD Rd, Ra, Rb
+            case KOP_ADD: { /**< ADD Rd, Ra, Rb */
                 uint8_t rd = *ip++;
                 uint8_t ra = *ip++;
                 uint8_t rb = *ip++;
 
                 emit_load_reg(&code, RAX, ra, vm_reg);
-                emit_load_reg(&code, RBX, rb, vm_reg); // Use RBX as temp
+                emit_load_reg(&code, RBX, rb, vm_reg); /**< Use RBX as temp */
                 
-                // ADD RAX, RBX
+                /** ADD RAX, RBX */
                 EMIT_3(REX_W, 0x01, 0xD8); 
                 
                 emit_store_reg(&code, RAX, rd, vm_reg);
@@ -241,7 +242,7 @@ void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
                 uint8_t rb = *ip++;
                 emit_load_reg(&code, RAX, ra, vm_reg);
                 emit_load_reg(&code, RBX, rb, vm_reg);
-                // SUB RAX, RBX
+                /** SUB RAX, RBX */
                 EMIT_3(REX_W, 0x29, 0xD8);
                 emit_store_reg(&code, RAX, rd, vm_reg);
                 emit_set_type_int(&code, rd, vm_reg);
@@ -254,7 +255,7 @@ void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
                 uint8_t rb = *ip++;
                 emit_load_reg(&code, RAX, ra, vm_reg);
                 emit_load_reg(&code, RBX, rb, vm_reg);
-                // IMUL RAX, RBX
+                /** IMUL RAX, RBX */
                 EMIT_4(REX_W, 0x0F, 0xAF, 0xC3);
                 emit_store_reg(&code, RAX, rd, vm_reg);
                 emit_set_type_int(&code, rd, vm_reg);
@@ -265,45 +266,45 @@ void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
                 uint8_t rd = *ip++;
                 uint8_t ra = *ip++;
                 uint8_t rb = *ip++;
-                emit_load_reg(&code, RAX, ra, vm_reg); // Dividend
-                emit_load_reg(&code, RBX, rb, vm_reg); // Divisor
-                // CQO (Sign extend RAX to RDX:RAX)
+                emit_load_reg(&code, RAX, ra, vm_reg); /**< Dividend */
+                emit_load_reg(&code, RBX, rb, vm_reg); /**< Divisor */
+                /** CQO (Sign extend RAX to RDX:RAX) */
                 EMIT_2(REX_W, 0x99);
-                // IDIV RBX
+                /** IDIV RBX */
                 EMIT_3(REX_W, 0xF7, 0xFB);
                 emit_store_reg(&code, RAX, rd, vm_reg);
                 emit_set_type_int(&code, rd, vm_reg);
                 break;
             }
 
-            case KOP_JMP: { // JMP Imm24 (Absolute bytecode offset)
+            case KOP_JMP: { /**< JMP Imm24 (Absolute bytecode offset) */
                 uint8_t b1 = *ip++; uint8_t b2 = *ip++; uint8_t b3 = *ip++;
                 int target = (b1 << 16) | (b2 << 8) | b3;
                 
-                // JMP rel32 (E9 cd)
+                /** JMP rel32 (E9 cd) */
                 EMIT_1(0xE9);
-                // Record fixup
+                /** Record fixup */
                 fixups[fixup_count].jump_inst_offset = (int)(code - start_addr);
                 fixups[fixup_count].target_bytecode_offset = target;
                 fixup_count++;
-                EMIT_INT32(0); // Placeholder
+                EMIT_INT32(0); /**< Placeholder */
                 break;
             }
             
-            case KOP_JZ: { // JZ Ra, Imm16 (Relative bytecode offset)
+            case KOP_JZ: { /**< JZ Ra, Imm16 (Relative bytecode offset) */
                 uint8_t ra = *ip++;
                 uint8_t b1 = *ip++; uint8_t b2 = *ip++;
                 int16_t offset = (int16_t)((b1 << 8) | b2);
-                int target = bc_offset + 3 + offset; // Current inst start + 3 + offset ?? 
-                // Wait, logic in interpreter: ip += offset. ip is AFTER reading args.
-                // So target = (ip index) + offset. ip index is bc_offset + 4.
+                int target = bc_offset + 3 + offset; /**< Current inst start + 3 + offset ?? */
+                /** Wait, logic in interpreter: ip += offset. ip is AFTER reading args. */
+                /** So target = (ip index) + offset. ip index is bc_offset + 4. */
                 target = (bc_offset + 4) + offset;
 
                 emit_load_reg(&code, RAX, ra, vm_reg);
-                // TEST RAX, RAX
+                /** TEST RAX, RAX */
                 EMIT_3(REX_W, 0x85, 0xC0);
                 
-                // JZ rel32 (0F 84 cd)
+                /** JZ rel32 (0F 84 cd) */
                 EMIT_2(0x0F, 0x84);
                 fixups[fixup_count].jump_inst_offset = (int)(code - start_addr);
                 fixups[fixup_count].target_bytecode_offset = target;
@@ -312,7 +313,7 @@ void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
                 break;
             }
             
-            case KOP_JNZ: { // JNZ Ra, Imm16
+            case KOP_JNZ: { /**< JNZ Ra, Imm16 */
                 uint8_t ra = *ip++;
                 uint8_t b1 = *ip++; uint8_t b2 = *ip++;
                 int16_t offset = (int16_t)((b1 << 8) | b2);
@@ -321,7 +322,7 @@ void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
                 emit_load_reg(&code, RAX, ra, vm_reg);
                 EMIT_3(REX_W, 0x85, 0xC0);
                 
-                // JNZ rel32 (0F 85 cd)
+                /** JNZ rel32 (0F 85 cd) */
                 EMIT_2(0x0F, 0x85);
                 fixups[fixup_count].jump_inst_offset = (int)(code - start_addr);
                 fixups[fixup_count].target_bytecode_offset = target;
@@ -334,39 +335,39 @@ void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
                 uint8_t rd = *ip++; uint8_t ra = *ip++; uint8_t rb = *ip++;
                 emit_load_reg(&code, RAX, ra, vm_reg);
                 emit_load_reg(&code, RBX, rb, vm_reg);
-                EMIT_3(REX_W, 0x31, 0xD8); // XOR RAX, RBX
+                EMIT_3(REX_W, 0x31, 0xD8); /**< XOR RAX, RBX */
                 emit_store_reg(&code, RAX, rd, vm_reg);
                 emit_set_type_int(&code, rd, vm_reg);
                 break;
             }
 
             default:
-                // Fallback / unsupported
-                // Generate a return -1 to signal error?
-                // For now, just HALT
-                EMIT_1(0xB8); EMIT_INT32(0); // mov eax, 0
-                EMIT_1(0x5B); // pop rbx
-                EMIT_1(0xC9); // leave
-                EMIT_1(0xC3); // ret
+                /** Fallback / unsupported */
+                /** Generate a return -1 to signal error? */
+                /** For now, just HALT */
+                EMIT_1(0xB8); EMIT_INT32(0); /**< mov eax, 0 */
+                EMIT_1(0x5B); /**< pop rbx */
+                EMIT_1(0xC9); /**< leave */
+                EMIT_1(0xC3); /**< ret */
                 goto finish_compilation;
         }
     }
 
 finish_compilation:
-    // Resolve Fixups
+    /** Resolve Fixups */
     for (int i = 0; i < fixup_count; i++) {
-        int jump_src = fixups[i].jump_inst_offset; // This points to the 4-byte immediate
+        int jump_src = fixups[i].jump_inst_offset; /**< This points to the 4-byte immediate */
         int target_bc = fixups[i].target_bytecode_offset;
         
         if (target_bc >= 0 && target_bc < chunk->count && bc_to_mc[target_bc] != -1) {
             int target_mc = bc_to_mc[target_bc];
-            // Calculate relative offset: target - (src + 4)
+            /** Calculate relative offset: target - (src + 4) */
             int rel_offset = target_mc - (jump_src + 4);
             
-            // Patch code
+            /** Patch code */
             *(int32_t*)(start_addr + jump_src) = rel_offset;
         } else {
-            // printf("[ComeOnJIT] Failed to resolve jump target %d\n", target_bc);
+            /** printf("[ComeOnJIT] Failed to resolve jump target %d\n", target_bc); */
         }
     }
 

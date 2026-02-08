@@ -10,6 +10,7 @@
 #include <string.h>
 
 // --- 全局狀態 ---
+/** @brief 全局狀態 */
 // Use Thread Local Storage for VM instance to support multi-threading
 #if defined(_MSC_VER)
 __declspec(thread) KVM* g_current_vm = NULL;
@@ -18,10 +19,12 @@ __thread KVM* g_current_vm = NULL;
 #endif
 
 static KVM g_internal_vm; // Only used if KInit/KRun manages lifecycle (Main thread only?)
+/** @brief 僅在 KInit/KRun 管理生命週期時使用 (僅限主線程?) */
 static bool g_initialized = false;
 
 
 // --- 內部輔助 ---
+/** @brief 內部輔助 */
 
 void KBindVM(KVM* vm) {
     g_current_vm = vm;
@@ -38,10 +41,12 @@ static void ensure_init() {
 }
 
 // 註冊本地函數到 VM 全局變量
+/** @brief 註冊本地函數到 VM 全局變量 */
 static void register_native(const char* name, void* func) {
     if (!g_current_vm) return;
     
     // Create Native Object
+    /** @brief 創建本地對象 */
     KObjNative* native = (KObjNative*)malloc(sizeof(KObjNative));
     native->header.type = OBJ_NATIVE;
     native->header.marked = false;
@@ -53,6 +58,7 @@ static void register_native(const char* name, void* func) {
     native->name = strdup(name);
     
     // Add to globals
+    /** @brief 添加到全局變量 */
     // TODO: Support Modules properly. For now, flat globals or "os.print" as key?
     // KVM usually uses string keys for globals.
     
@@ -98,6 +104,7 @@ void KRun(const char* source) {
 }
 
 // Global Module Registry (Using VM->modules table)
+/** @brief 全局模塊註冊表 (使用 VM->modules 表) */
 // typedef struct ModuleEntry { ... } ModuleEntry; // Removed
 // static ModuleEntry* g_modules = NULL; // Removed
 
@@ -105,6 +112,7 @@ void KLibNew(const char* package_name) {
     if (!g_current_vm) return;
     
     // Create a new Instance object to represent the module
+    /** @brief 創建一個新的實例對象來表示模塊 */
     KObjInstance* module = (KObjInstance*)malloc(sizeof(KObjInstance));
     module->header.type = OBJ_CLASS_INSTANCE;
     module->header.marked = false;
@@ -117,6 +125,7 @@ void KLibNew(const char* package_name) {
     init_table(&module->fields);
     
     // Register as module in VM
+    /** @brief 在 VM 中註冊為模塊 */
     KValue val;
     val.type = VAL_OBJ;
     val.as.obj = module;
@@ -134,6 +143,7 @@ void KLibAdd(const char* package_name, const char* type, const char* name, void*
     KValue module_val;
     if (!table_get(&g_current_vm->modules, package_name, &module_val)) {
         // Auto-create module if not exists
+        /** @brief 如果不存在則自動創建模塊 */
         KLibNew(package_name);
         table_get(&g_current_vm->modules, package_name, &module_val);
     }
@@ -141,6 +151,7 @@ void KLibAdd(const char* package_name, const char* type, const char* name, void*
     KObjInstance* module = (KObjInstance*)module_val.as.obj;
     
     // Create Native Function Object
+    /** @brief 創建本地函數對象 */
     KObjNative* native = (KObjNative*)malloc(sizeof(KObjNative));
     native->header.type = OBJ_NATIVE;
     native->header.marked = false;
@@ -156,6 +167,7 @@ void KLibAdd(const char* package_name, const char* type, const char* name, void*
     val.as.obj = native;
     
     // Add to module fields
+    /** @brief 添加到模塊字段 */
     table_set(&module->fields, name, val);
 }
 
@@ -195,6 +207,7 @@ void KLibAddMethod(const char* class_name, const char* method_name, void* func) 
     KObjClass* klass = (KObjClass*)class_val.as.obj;
     
     // Create Native Function
+    /** @brief 創建本地函數 */
     KObjNative* native = (KObjNative*)malloc(sizeof(KObjNative));
     native->header.type = OBJ_NATIVE;
     native->header.marked = false;
@@ -237,6 +250,7 @@ void KLibClassAdd(const char* class_name, const char* member_type, const char* n
     if (!g_current_vm) return;
     
     // Find Class Object
+    /** @brief 查找類對象 */
     // Assume classes are in globals or modules.
     // For now, search globals (or modules if we knew which module).
     // Let's assume class_name is simple name in globals, or dotted "module.Class"
@@ -250,6 +264,7 @@ void KLibClassAdd(const char* class_name, const char* member_type, const char* n
 }
 
 // --- 返回值處理 ---
+/** @brief 返回值處理 */
 
 void KReturnInt(KInt val) {
     // Push return value to stack?
@@ -313,6 +328,7 @@ void KReturnString(const char* s) {
 }
 
 // --- 參數獲取 ---
+/** @brief 參數獲取 */
 
 int KGetArgCount() {
     if (!g_current_vm) return 0;

@@ -1,6 +1,3 @@
-//
-// Created by Helix on 2026/1/21.
-//
 #include "kconst.h"
 #include <stdio.h>
 #include <string.h>
@@ -13,13 +10,13 @@
 #include "kcache.h"
 #include "comeonjit.h"
 #include "kgc.h"
-#include "kstd.h" // 引入標準庫頭文件
-#include "kapi.h" // 引入 KInit
-#include "keditor.h" // 引入編輯器
+#include "kstd.h" /**< 引入標準庫頭文件 */
+#include "kapi.h" /**< 引入 KInit */
+#include "keditor.h" /**< 引入編輯器 */
 #include <sys/stat.h>
 #include <ctype.h>
 
-// 檢查目錄是否存在
+/** @brief 檢查目錄是否存在 */
 static bool dir_exists(const char* path) {
     struct stat sb;
     if (stat(path, &sb) == 0 && (sb.st_mode & S_IFDIR)) {
@@ -28,7 +25,7 @@ static bool dir_exists(const char* path) {
     return false;
 }
 
-// 讀取文件內容
+/** @brief 讀取文件內容 */
 static char* read_file(const char* path, bool silent) {
     FILE* file = fopen(path, "rb");
     if (file == NULL) {
@@ -60,7 +57,7 @@ static char* read_file(const char* path, bool silent) {
     return buffer;
 }
 
-// Helper to load module from file
+/** @brief 從文件加載模塊的輔助函數 */
 static KValue load_module_file(KVM* vm, const char* name, const char* path_override) {
     char path[1024];
     
@@ -78,16 +75,16 @@ static KValue load_module_file(KVM* vm, const char* name, const char* path_overr
     
     char fullpath[1024];
     sprintf(fullpath, "%s.kri", path);
-    char* source = read_file(fullpath, true); // Silent probe
+    char* source = read_file(fullpath, true); /**< 靜默探測 */
     if (!source) {
         sprintf(fullpath, "%s.k", path);
-        source = read_file(fullpath, true); // Silent probe
+        source = read_file(fullpath, true); /**< 靜默探測 */
     }
     
-    // Try relative to root dir
+    // 嘗試相對於根目錄
     if (!source && vm->root_dir) {
         if (path_override) {
-             // For override, we strictly follow it relative to root
+             // 對於重寫，我們嚴格遵循相對於根目錄
              sprintf(fullpath, "%s/%s.kri", vm->root_dir, path);
              source = read_file(fullpath, true);
              if (!source) {
@@ -372,8 +369,10 @@ KValue import_module_handler(KVM* vm, const char* name) {
     // 2. Try member access (Recursive)
     const char* last_dot = strrchr(name, '.');
     if (last_dot) {
-        char parent[1024];
         int len = last_dot - name;
+        if (len >= 1024) len = 1023;
+        
+        char parent[1024];
         strncpy(parent, name, len);
         parent[len] = '\0';
         
@@ -383,7 +382,7 @@ KValue import_module_handler(KVM* vm, const char* name) {
             parent_val = import_module_handler(vm, parent); // Recursive load
         }
         
-        if (parent_val.type == VAL_OBJ) {
+        if (parent_val.type == VAL_OBJ && parent_val.as.obj != NULL) {
              // Extract member
              const char* member = last_dot + 1;
              // Check if parent is instance (module)
@@ -449,8 +448,8 @@ static void run_file(const char* path, bool compile_only, const char* lib_arg) {
         return;
     }
     
-    // 保存字節碼緩存 (如果需要)
-    // kcache_save("out.kc", &chunk, ...);
+    // 保存字節碼緩存
+    kcache_save("out.kc", &chunk, 0, 0);
 
     if (compile_only) {
         printf("Compilation successful.\n");
@@ -527,114 +526,26 @@ static void run_file(const char* path, bool compile_only, const char* lib_arg) {
 }
 
 void print_help() {
-    printf("Korelin SDK %s\n", KORELIN_SDK_VERSION);
-    printf("Usage: korelin <command> [args]\n");
-    printf("Commands: run, compile, version, help, editor\n");
-    printf("Rungo: init, install, uninstall, list\n");
+    printf("* Welcome to Korelin\n"
+           "* Korelin SDK version: %s\n"
+           "* (c) 2026 Nexogic, made under the MIT License\n"
+           "\nKorelin usage:\n"
+           "\n    korelin <command> [arguments]\n"
+           "\nThe commands are:\n\n"
+           "    version                Print Korelin SDK version.\n"
+           "    run <file-name>        Compile into KC and run Korelin program.\n"
+           "    compile <file-name>    Compile to KC and do not run the Korelin program.\n"
+           "    editor [file-name]     Open built-in text editor.\n"
+           "    help                   For more information about a command.\n"
+           "\nRungo usage:\n"
+           "\n    rungo <command> [arguments]\n"
+           "\nThe commands are:\n\n"
+           "    install <package-name>    Install package (-i for mirror url)\n"
+           "    uninstall <package-name>  Uninstall the specified package\n"
+           "    list                      List all installed packages\n"
+           "    init <project-name>       Initialize a new Rungo project\n",
+           KORELIN_SDK_VERSION);
 }
-
-// --- Rungo Package Manager Logic ---
-
-static void rungo_init(const char* project_name) {
-    if (!project_name) {
-        printf("Usage: rungo init <project-name>\n");
-        return;
-    }
-    
-    // Create directory
-    if (mkdir(project_name) != 0) {
-        // printf("Error creating directory '%s' (might exist)\n", project_name);
-        // Continue anyway
-    }
-    
-    char path[1024];
-    
-    // Create src directory
-    sprintf(path, "%s/src", project_name);
-    mkdir(path);
-    
-    // Create main.k
-    sprintf(path, "%s/src/main.k", project_name);
-    FILE* f = fopen(path, "w");
-    if (f) {
-        fprintf(f, "import os;\n\nvoid main() {\n    os.println(\"Hello, Rungo!\");\n}\n");
-        fclose(f);
-    }
-    
-    // Create korelin.toml
-    sprintf(path, "%s/korelin.toml", project_name);
-    f = fopen(path, "w");
-    if (f) {
-        fprintf(f, "[package]\nname = \"%s\"\nversion = \"0.1.0\"\nauthors = [\"Your Name <you@example.com>\"]\n\n[dependencies]\n", project_name);
-        fclose(f);
-    }
-    
-    printf("Created new Rungo project: %s\n", project_name);
-}
-
-static void rungo_install(const char* package_name) {
-    if (!package_name) {
-        printf("Usage: rungo install <package-name>\n");
-        return;
-    }
-    
-    // Create packages directory if not exists
-    if (!dir_exists("packages")) {
-        mkdir("packages");
-    }
-    
-    char path[1024];
-    sprintf(path, "packages/%s", package_name);
-    
-    if (dir_exists(path)) {
-        printf("Package '%s' is already installed.\n", package_name);
-        return;
-    }
-    
-    mkdir(path);
-    
-    // Create a dummy lib.k
-    sprintf(path, "packages/%s/lib.k", package_name);
-    FILE* f = fopen(path, "w");
-    if (f) {
-        fprintf(f, "// Package: %s\n// Installed by Rungo\n", package_name);
-        fclose(f);
-    }
-    
-    printf("Installed package: %s\n", package_name);
-}
-
-static void rungo_uninstall(const char* package_name) {
-    if (!package_name) {
-        printf("Usage: rungo uninstall <package-name>\n");
-        return;
-    }
-    
-    char path[1024];
-    sprintf(path, "packages/%s/lib.k", package_name);
-    remove(path);
-    
-    sprintf(path, "packages/%s", package_name);
-    if (rmdir(path) == 0) {
-        printf("Uninstalled package: %s\n", package_name);
-    } else {
-        printf("Failed to uninstall package '%s' (or not found)\n", package_name);
-    }
-}
-
-static void rungo_list() {
-    if (!dir_exists("packages")) {
-        printf("No packages installed (packages directory not found).\n");
-        return;
-    }
-    
-    printf("Installed packages:\n");
-    // Listing directories is platform specific. 
-    // For now we just print a placeholder or use a simple system command
-    system("dir packages /b"); // Windows specific
-}
-
-// -----------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -649,30 +560,13 @@ int main(int argc, char* argv[]) {
     const char* rungo_cmd = command;
     int arg_offset = 2; // Argument for command starts at argv[2]
     
-    if (strcmp(command, "rungo") == 0) {
-        if (argc < 3) {
-            print_help();
-            return 0;
-        }
-        rungo_cmd = argv[2];
-        arg_offset = 3;
-        is_rungo = true;
-    }
-    
-    // Rungo Commands
-    if (strcmp(rungo_cmd, "init") == 0) {
-        rungo_init(argc > arg_offset ? argv[arg_offset] : NULL);
-        return 0;
-    } else if (strcmp(rungo_cmd, "install") == 0) {
-        rungo_install(argc > arg_offset ? argv[arg_offset] : NULL);
-        return 0;
-    } else if (strcmp(rungo_cmd, "uninstall") == 0) {
-        rungo_uninstall(argc > arg_offset ? argv[arg_offset] : NULL);
-        return 0;
-    } else if (strcmp(rungo_cmd, "list") == 0) {
-        rungo_list();
+    if (argc < 3) {
+        print_help();
         return 0;
     }
+    rungo_cmd = argv[2];
+    arg_offset = 3;
+    is_rungo = true;
     
     // Korelin Commands
     if (strcmp(command, "version") == 0) {
@@ -709,7 +603,7 @@ int main(int argc, char* argv[]) {
         // Implicit run
         // Check if file exists or extension matches
         const char* ext = strrchr(command, '.');
-        if (ext && (strcmp(ext, ".k") == 0 || strcmp(ext, ".kri") == 0)) {
+        if (ext && strcmp(ext, ".kri") == 0) {
             run_file(command, false, NULL);
         } else {
             printf("Unknown command: %s\n", command);

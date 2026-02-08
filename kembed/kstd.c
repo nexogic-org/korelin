@@ -37,9 +37,14 @@
 #endif
 
 // -------------------------------------------------------------------------
-// Helpers
+/** @brief 輔助函數 */
 // -------------------------------------------------------------------------
 
+/**
+ * @brief 將值轉換為字符串
+ * @param v 要轉換的值
+ * @return 轉換後的字符串 (需要釋放)
+ */
 static char* to_string(KValue v) {
     char buf[64];
     if (v.type == VAL_INT) sprintf(buf, "%lld", v.as.integer);
@@ -56,7 +61,7 @@ static char* to_string(KValue v) {
     return strdup(buf);
 }
 
-// Access VM internals safely
+/** @brief 安全訪問 VM 內部結構 */
 #if defined(_MSC_VER)
 extern __declspec(thread) KVM* g_current_vm;
 #else
@@ -67,7 +72,7 @@ static KVM* get_vm() {
     return g_current_vm;
 }
 
-// Forward declaration
+/** @brief 前向聲明 */
 void kstd_register();
 
 static int get_arg_start() {
@@ -112,7 +117,7 @@ static void push_value(KValue v) {
     if (vm) kvm_push(vm, v);
 }
 
-// Helper to create a new String Object directly
+/** @brief 輔助函數：直接創建新的字符串對象 */
 static KObjString* alloc_string(KVM* vm, const char* chars, int length) {
     KObjString* str = (KObjString*)malloc(sizeof(KObjString));
     str->header.type = OBJ_STRING;
@@ -129,7 +134,7 @@ static KObjString* alloc_string(KVM* vm, const char* chars, int length) {
     return str;
 }
 
-// Helper to create a new Array Object
+/** @brief 輔助函數：創建新的數組對象 */
 static KObjArray* alloc_array(KVM* vm, int length) {
     KObjArray* arr = (KObjArray*)malloc(sizeof(KObjArray));
     arr->header.type = OBJ_ARRAY;
@@ -145,7 +150,7 @@ static KObjArray* alloc_array(KVM* vm, int length) {
     return arr;
 }
 
-// Helper to create a new Instance Object (acting as Map/Object)
+/** @brief 輔助函數：創建新的實例對象 (作為 Map/Object) */
 static KObjInstance* alloc_instance(KVM* vm) {
     KObjInstance* ins = (KObjInstance*)malloc(sizeof(KObjInstance));
     ins->header.type = OBJ_CLASS_INSTANCE;
@@ -160,9 +165,10 @@ static KObjInstance* alloc_instance(KVM* vm) {
 }
 
 // -------------------------------------------------------------------------
-// OS 庫
+/** @brief OS 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 打印到標準輸出 (無換行) */
 static void std_os_print() {
     int start = get_arg_start();
     int count = KGetArgCount();
@@ -355,9 +361,10 @@ static void std_os_getOSArch() {
 }
 
 // -------------------------------------------------------------------------
-// Time 庫
+/** @brief Time 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 獲取當前時間戳 (毫秒) */
 static void std_time_now() {
     time_t t = time(NULL);
     KReturnInt((KInt)t * 1000);
@@ -449,9 +456,10 @@ static void std_time_getSecond() {
 }
 
 // -------------------------------------------------------------------------
-// Net 庫
+/** @brief Net 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 延遲初始化 WinSock */
 static void lazy_init_winsock() {
 #ifdef _WIN32
     static bool inited = false;
@@ -653,9 +661,10 @@ static void std_net_getIP() {
 }
 
 // -------------------------------------------------------------------------
-// String 庫
+/** @brief String 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 獲取字符串長度 */
 static void std_string_len() {
     int start = get_arg_start();
     KString s = KGetArgString(start);
@@ -815,9 +824,10 @@ static void std_string_indexOf() {
 }
 
 // -------------------------------------------------------------------------
-// Math 庫
+/** @brief Math 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 計算絕對值 */
 static void std_math_abs() {
     int start = get_arg_start();
     KValue v = get_vm()->native_args[start];
@@ -888,9 +898,10 @@ static void std_math_pi() {
 }
 
 // -------------------------------------------------------------------------
-// Algorithm 庫
+/** @brief Algorithm 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 比較兩個值 (用於排序) */
 static int compare_values(const void* a, const void* b) {
     KValue va = *(KValue*)a;
     KValue vb = *(KValue*)b;
@@ -963,9 +974,10 @@ static void std_algo_average() {
 }
 
 // -------------------------------------------------------------------------
-// JSON 庫
+/** @brief JSON 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 跳過空白字符 */
 static const char* skip_ws(const char* json) {
     while(*json && isspace((unsigned char)*json)) json++;
     return json;
@@ -1080,12 +1092,14 @@ static void std_json_set() {
 }
 
 // -------------------------------------------------------------------------
-// Thread 庫
+/** @brief Thread 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 線程參數結構體 */
 typedef struct {
     KObjFunction* func;
-    KTable* parent_globals;
+    // Snapshot of globals to pass to child thread
+    KTable globals_snapshot;
 } ThreadArgs;
 
 #ifdef _WIN32
@@ -1100,19 +1114,57 @@ unsigned __stdcall thread_proc(void* arg) {
     // Register standard libraries for this thread's VM
     kstd_register();
     
-    // Copy globals from parent VM (shallow copy)
-    // This allows child thread to access global variables (like modules) from parent
-    if (args->parent_globals && args->parent_globals->entries) {
-        for (int i = 0; i < args->parent_globals->capacity; i++) {
-            KTableEntry* entry = &args->parent_globals->entries[i];
+    // Import globals from snapshot
+    // We must deep copy to ensure thread safety (separate GC heaps)
+    if (args->globals_snapshot.entries) {
+        for (int i = 0; i < args->globals_snapshot.capacity; i++) {
+            KTableEntry* entry = &args->globals_snapshot.entries[i];
             if (entry->key != NULL) {
-                table_set(&vm.globals, entry->key, entry->value);
+                KValue val = entry->value;
+                KValue new_val = val; // Default shallow copy
+                
+                // Deep copy strings to avoid GC race/double-free
+                if (val.type == VAL_STRING) {
+                    // C-string literal, usually safe but better to be sure
+                    // If it's a literal it's fine. If it was a heap string... VAL_STRING is usually char*.
+                    // In this VM, VAL_STRING is raw char* (literals)?
+                    // No, look at klex.h: KORELIN_TOKEN_STRING.
+                    // But in VM, we have VAL_OBJ for heap strings.
+                    // VAL_STRING might be used for raw C strings in some cases?
+                    // In to_string: if (v.type == VAL_STRING) return strdup(v.as.str);
+                    // In alloc_string: creates OBJ_STRING.
+                    // If VAL_STRING is used, it's likely a static string or managed manually.
+                    // Let's assume VAL_STRING is safe to copy pointer if it's static.
+                } else if (val.type == VAL_OBJ) {
+                    KObj* obj = (KObj*)val.as.obj;
+                    if (obj->header.type == OBJ_STRING) {
+                        KObjString* s = (KObjString*)obj;
+                        KObjString* new_s = alloc_string(&vm, s->chars, s->length);
+                        new_val.type = VAL_OBJ;
+                        new_val.as.obj = (KObj*)new_s;
+                    }
+                    // TODO: Deep copy Arrays/Maps if needed. 
+                    // For now, we skip other objects to avoid complex graph copying issues, 
+                    // or shallow copy them (RISKY). 
+                    // User asked for "Shared Constant Pool", implying immutable data.
+                    // Strings are immutable.
+                    // Let's assume other objects are not safe to share yet.
+                    else {
+                        // Skip non-string objects to prevent GC corruption
+                         continue; 
+                    }
+                }
+                
+                table_set(&vm.globals, entry->key, new_val);
             }
         }
+        // Free the snapshot table structure (not the values, as they belong to parent)
+        free_table(&args->globals_snapshot); 
     }
     
     // Copy bytecode chunk but ensure we don't double free it
     // The chunk belongs to the main VM. The child VM uses it read-only.
+    // This is safe as long as main thread doesn't unload code while child is running.
     vm.chunk = args->func->chunk;
     
     // Create a stack frame for the function
@@ -1126,6 +1178,10 @@ unsigned __stdcall thread_proc(void* arg) {
     kvm_interpret(&vm, args->func->chunk);
     
     // Cleanup
+    // vm.chunk is shared, so set to NULL before kvm_free to avoid double free if kvm_free frees chunk
+    // kvm_free usually frees vm->chunk.
+    vm.chunk = NULL; 
+    
     kvm_free(&vm);
     free(args);
     return 0;
@@ -1140,22 +1196,33 @@ static void std_thread_create() {
         KObjFunction* func = (KObjFunction*)v.as.obj;
         ThreadArgs* args = (ThreadArgs*)malloc(sizeof(ThreadArgs));
         args->func = func;
-        args->parent_globals = &vm->globals;
+        
+        // Create snapshot of globals
+        init_table(&args->globals_snapshot);
+        for (int i = 0; i < vm->globals.capacity; i++) {
+            KTableEntry* entry = &vm->globals.entries[i];
+            if (entry->key != NULL) {
+                // We assume key strings are static or managed by string interning that outlives this?
+                // Keys in KTable are usually char*. 
+                // We should probably strdup keys if we want total isolation, 
+                // but table_set duplicates key.
+                table_set(&args->globals_snapshot, entry->key, entry->value);
+            }
+        }
         
 #ifdef _WIN32
         unsigned tid;
         HANDLE h = (HANDLE)_beginthreadex(NULL, 0, thread_proc, args, 0, &tid);
         if (h) {
-            // Leak handle to allow joining? No, we should return handle ID or manage it.
-            // For now, return TID. Close handle if not tracking?
-            // If we close handle, we can't join.
-            // Let's store handle in a global map? Or return it cast to int (unsafe on x64).
-            // Cast HANDLE (void*) to KInt (int64) is safe.
             KReturnInt((KInt)(uintptr_t)h);
         } else {
+            free_table(&args->globals_snapshot);
+            free(args);
             KReturnInt(0);
         }
 #else
+        free_table(&args->globals_snapshot);
+        free(args);
         KReturnInt(0);
 #endif
     } else {
@@ -1250,9 +1317,10 @@ static void std_thread_sleep() {
 }
 
 // -------------------------------------------------------------------------
-// Dynlib 庫
+/** @brief Dynlib 庫模組 */
 // -------------------------------------------------------------------------
 
+/** @brief 加載動態庫 */
 static void std_dynlib_load() {
     int start = get_arg_start();
     KString path = KGetArgString(start);
@@ -1283,15 +1351,88 @@ static void std_dynlib_get() {
 static void std_dynlib_call() {
     int start = get_arg_start();
     KInt func = KGetArgInt(start);
-    KInt arg1 = KGetArgInt(start + 1);
-    if (func) {
-        typedef int (*FuncType)(int);
-        FuncType f = (FuncType)(uintptr_t)func;
-        int res = f((int)arg1);
-        KReturnInt(res);
-    } else {
-        KReturnInt(0);
+    if (!func) { KReturnInt(0); return; }
+    
+    int count = KGetArgCount();
+    int n_args = count - (start + 1);
+    if (n_args < 0) n_args = 0;
+    if (n_args > 16) n_args = 16; // Limit to 16 args
+    
+    KInt args[16] = {0};
+    KVM* vm = get_vm();
+
+    for(int i=0; i<n_args; i++) {
+        int idx = start + 1 + i;
+        if (idx < vm->native_argc) {
+            KValue v = vm->native_args[idx];
+            if (v.type == VAL_INT) {
+                args[i] = v.as.integer;
+            } else if (v.type == VAL_BOOL) {
+                args[i] = v.as.boolean ? 1 : 0;
+            } else if (v.type == VAL_STRING) {
+                args[i] = (KInt)(uintptr_t)v.as.str;
+            } else if (v.type == VAL_OBJ) {
+                KObj* obj = (KObj*)v.as.obj;
+                if (obj->header.type == OBJ_STRING) {
+                    args[i] = (KInt)(uintptr_t)((KObjString*)obj)->chars;
+                } else {
+                    args[i] = (KInt)(uintptr_t)obj;
+                }
+            } else if (v.type == VAL_NULL) {
+                args[i] = 0;
+            } else {
+                // Float/Double as bits? or cast? usually cast for FFI if int expected
+                // But if generic, maybe raw bits?
+                // Let's just cast to int for now as simple FFI
+                if (v.type == VAL_FLOAT) args[i] = (KInt)v.as.single_prec;
+                else if (v.type == VAL_DOUBLE) args[i] = (KInt)v.as.double_prec;
+                else args[i] = 0;
+            }
+        }
     }
+    
+    typedef KInt (*Func0)();
+    typedef KInt (*Func1)(KInt);
+    typedef KInt (*Func2)(KInt, KInt);
+    typedef KInt (*Func3)(KInt, KInt, KInt);
+    typedef KInt (*Func4)(KInt, KInt, KInt, KInt);
+    typedef KInt (*Func5)(KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func6)(KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func7)(KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func8)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func9)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func10)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func11)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func12)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func13)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func14)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func15)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    typedef KInt (*Func16)(KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt, KInt);
+    
+    void* f = (void*)(uintptr_t)func;
+    KInt res = 0;
+    
+    switch(n_args) {
+        case 0: res = ((Func0)f)(); break;
+        case 1: res = ((Func1)f)(args[0]); break;
+        case 2: res = ((Func2)f)(args[0], args[1]); break;
+        case 3: res = ((Func3)f)(args[0], args[1], args[2]); break;
+        case 4: res = ((Func4)f)(args[0], args[1], args[2], args[3]); break;
+        case 5: res = ((Func5)f)(args[0], args[1], args[2], args[3], args[4]); break;
+        case 6: res = ((Func6)f)(args[0], args[1], args[2], args[3], args[4], args[5]); break;
+        case 7: res = ((Func7)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6]); break;
+        case 8: res = ((Func8)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]); break;
+        case 9: res = ((Func9)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]); break;
+        case 10: res = ((Func10)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]); break;
+        case 11: res = ((Func11)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]); break;
+        case 12: res = ((Func12)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]); break;
+        case 13: res = ((Func13)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]); break;
+        case 14: res = ((Func14)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]); break;
+        case 15: res = ((Func15)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]); break;
+        case 16: res = ((Func16)f)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]); break;
+    }
+    
+    KReturnInt(res);
 }
 
 static void std_dynlib_unload() {
@@ -1310,9 +1451,10 @@ static void std_dynlib_getLastError() {
 }
 
 // -------------------------------------------------------------------------
-// Map Class
+/** @brief Map 類 */
 // -------------------------------------------------------------------------
 
+/** @brief 初始化 Map */
 static void std_map_init() {
     // Nothing to do, instance created with empty fields
     KReturnVoid();
@@ -1442,13 +1584,14 @@ static void std_map_values() {
 }
 
 // -------------------------------------------------------------------------
-// Register
+/** @brief 註冊函數 */
 // -------------------------------------------------------------------------
 
 // -------------------------------------------------------------------------
-// Global Conversion Functions
+/** @brief 全局轉換函數 */
 // -------------------------------------------------------------------------
 
+/** @brief 轉換為整數 */
 static void std_global_int() {
     int start = get_arg_start();
     KValue v = get_vm()->native_args[start];

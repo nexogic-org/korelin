@@ -1,5 +1,4 @@
 //
-// Created by Helix on 2026/1/11.
 //
 
 #ifndef KORELIN_KCACHE_H
@@ -10,11 +9,13 @@
 #include "kcode.h"
 
 // 緩存文件魔數 "KORE"
+/** @brief 緩存文件魔數 "KORE" */
 #define KCACHE_MAGIC 0x45524F4B
 // 緩存版本號
 #define KCACHE_VERSION 1
 
 // 緩存文件頭部結構
+/** @brief 緩存文件頭部結構 */
 typedef struct {
     uint32_t magic;         // 文件標識
     uint32_t version;       // 版本號

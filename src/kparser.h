@@ -60,7 +60,7 @@ typedef enum {
     KAST_NODE_SCOPE_ACCESS, // 作用域访问 (::)
     KAST_NODE_CALL,         // 函数/方法调用
     KAST_NODE_ARRAY_ACCESS, // 数组访问 (arr[index])
-    KAST_NODE_ARRAY_LITERAL,// 数组字面量 [1, 2]
+    KAST_NODE_ARRAY_LITERAL, // 数组字面量 [1, 2, 3]
 
     // 表达式扩展
     KAST_NODE_BINARY_OP,    // 二元操作符 (&&, ||, ==, <, +, -, etc.)
@@ -340,7 +340,7 @@ typedef struct {
 } KastArrayAccess;
 
 // 数组字面量节点
-// 对应语法: [expr, expr, ...]
+// 对应语法: [ expr, ... ]
 typedef struct {
     KastNode base;
     KastNode** elements;
@@ -407,7 +407,6 @@ typedef struct {
 
 typedef struct {
     Lexer* lexer;
-    Token previous_token; // Previous token for better error reporting
     Token current_token;
     Token peek_token;
     Token peek_token_2; // Lookahead 2

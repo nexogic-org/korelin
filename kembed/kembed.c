@@ -1,6 +1,3 @@
-//
-// Created by Helix on 2026/1/21.
-//
 #include "kconst.h"
 #include <stdio.h>
 #include <string.h>
@@ -13,11 +10,15 @@
 #include "kcache.h"
 #include "comeonjit.h"
 #include "kgc.h"
-#include "kstd.h" // 引入標準庫頭文件
-#include "kapi.h" // 引入 KInit
+#include "kstd.h" /** 引入標準庫頭文件 */
+#include "kapi.h" /** 引入 KInit */
 #include <sys/stat.h>
 
-// 檢查目錄是否存在
+/**
+ * @brief 檢查目錄是否存在
+ * @param path 目錄路徑
+ * @return 如果存在返回 true，否則返回 false
+ */
 static bool dir_exists(const char* path) {
     struct stat sb;
     if (stat(path, &sb) == 0 && (sb.st_mode & S_IFDIR)) {
@@ -26,7 +27,12 @@ static bool dir_exists(const char* path) {
     return false;
 }
 
-// 讀取文件內容
+/**
+ * @brief 讀取文件內容
+ * @param path 文件路徑
+ * @param silent 是否靜默失敗
+ * @return 文件內容字符串，如果失敗返回 NULL
+ */
 static char* read_file(const char* path, bool silent) {
     FILE* file = fopen(path, "rb");
     if (file == NULL) {
@@ -58,7 +64,12 @@ static char* read_file(const char* path, bool silent) {
     return buffer;
 }
 
-// Helper to load module from file
+/**
+ * @brief 從文件加載模塊
+ * @param vm 虛擬機實例
+ * @param name 模塊名稱
+ * @return 加載的模塊值，如果失敗返回 NULL
+ */
 static KValue load_module_file(KVM* vm, const char* name) {
     char path[1024];
     int i=0, j=0;
@@ -71,13 +82,13 @@ static KValue load_module_file(KVM* vm, const char* name) {
     
     char fullpath[1024];
     sprintf(fullpath, "%s.kri", path);
-    char* source = read_file(fullpath, true); // Silent probe
+    char* source = read_file(fullpath, true); /** @brief 靜默探測 */
     if (!source) {
         sprintf(fullpath, "%s.k", path);
-        source = read_file(fullpath, true); // Silent probe
+        source = read_file(fullpath, true); /** @brief 靜默探測 */
     }
     
-    // Try relative to root dir
+    /** @brief 嘗試相對於根目錄 */
     if (!source && vm->root_dir) {
         sprintf(fullpath, "%s/%s.kri", vm->root_dir, path);
         source = read_file(fullpath, true);
@@ -88,9 +99,9 @@ static KValue load_module_file(KVM* vm, const char* name) {
     }
     
     if (!source) {
-        // Check if directory
+        /** @brief 檢查是否為目錄 */
         if (dir_exists(path)) {
-             // Create empty package module
+             /** @brief 創建空包模塊 */
              KObjInstance* module = (KObjInstance*)malloc(sizeof(KObjInstance));
              module->header.type = OBJ_CLASS_INSTANCE;
              module->header.marked = false;
@@ -100,11 +111,11 @@ static KValue load_module_file(KVM* vm, const char* name) {
              module->klass = NULL;
              init_table(&module->fields);
              
-             // Set __name__
+             /** @brief 設置 __name__ */
              KValue v_name;
              v_name.type = VAL_STRING;
              
-             // Allocate string for name
+             /** @brief 為名稱分配字符串 */
              KObjString* s_name = (KObjString*)malloc(sizeof(KObjString));
              s_name->header.type = OBJ_STRING;
              s_name->header.marked = false;
@@ -115,8 +126,8 @@ static KValue load_module_file(KVM* vm, const char* name) {
              s_name->chars = strdup(name);
              s_name->hash = 0;
              
-             v_name.as.str = s_name->chars; // Using raw char* for now as table key/val logic might differ, but let's stick to standard value
-             // Actually, VAL_STRING stores char*.
+             v_name.as.str = s_name->chars; /** @brief 暫時使用原始 char*，因為表鍵/值邏輯可能不同，但讓我們堅持使用標準值 */
+             /** @brief 實際上，VAL_STRING 存儲 char*。 */
              
              table_set(&module->fields, "__name__", v_name);
              
@@ -164,10 +175,10 @@ static KValue load_module_file(KVM* vm, const char* name) {
     
     kvm_interpret(vm, chunk);
     
-    // Copy back fields since vm->globals might have resized (realloc)
+    /** Copy back fields since vm->globals might have resized (realloc) */
     module->fields = vm->globals;
     
-    // Check for main function in module
+    /** Check for main function in module */
     KValue main_val;
     if (table_get(&vm->globals, "main", &main_val)) {
         if (main_val.type == VAL_OBJ && ((KObj*)main_val.as.obj)->header.type == OBJ_FUNCTION) {
@@ -183,7 +194,7 @@ static KValue load_module_file(KVM* vm, const char* name) {
         }
     }
     
-    // Set __name__
+    /** Set __name__ */
     KValue v_name;
     v_name.type = VAL_STRING;
     KObjString* s_name = (KObjString*)malloc(sizeof(KObjString));
@@ -211,36 +222,43 @@ static KValue load_module_file(KVM* vm, const char* name) {
     return val;
 }
 
-// 模塊導入處理器
+/**
+ * @brief 模塊導入處理器
+ * @param vm 虛擬機實例
+ * @param name 模塊名稱
+ * @return 導入的模塊值
+ */
 KValue import_module_handler(KVM* vm, const char* name) {
-    // 0. Check internal modules first
+    /** @brief 0. 首先檢查內部模塊 */
     KValue mod_val;
     if (table_get(&vm->modules, name, &mod_val)) {
         return mod_val;
     }
 
-    // 1. Try file load (Direct match)
+    /** @brief 1. 嘗試文件加載（直接匹配） */
     KValue val = load_module_file(vm, name);
     if (val.type != VAL_NULL) return val;
     
-    // 2. Try member access (Recursive)
+    /** @brief 2. 嘗試成員訪問（遞歸） */
     const char* last_dot = strrchr(name, '.');
     if (last_dot) {
-        char parent[1024];
         int len = last_dot - name;
+        if (len >= 1024) len = 1023;
+        
+        char parent[1024];
         strncpy(parent, name, len);
         parent[len] = '\0';
         
         KValue parent_val;
-        // Check if parent is already loaded (including standard libs)
+        /** @brief 檢查父級是否已加載（包括標準庫） */
         if (!table_get(&vm->modules, parent, &parent_val)) {
-            parent_val = import_module_handler(vm, parent); // Recursive load
+            parent_val = import_module_handler(vm, parent); /** @brief 遞歸加載 */
         }
         
-        if (parent_val.type == VAL_OBJ) {
-             // Extract member
+        if (parent_val.type == VAL_OBJ && parent_val.as.obj != NULL) {
+             /** @brief 提取成員 */
              const char* member = last_dot + 1;
-             // Check if parent is instance (module)
+             /** @brief 檢查父級是否為實例（模塊） */
              if (((KObj*)parent_val.as.obj)->header.type == OBJ_CLASS_INSTANCE) {
                  KObjInstance* inst = (KObjInstance*)parent_val.as.obj;
                  KValue field;
@@ -254,34 +272,38 @@ KValue import_module_handler(KVM* vm, const char* name) {
     return (KValue){VAL_NULL};
 }
 
-// 運行文件
+/**
+ * @brief 運行文件
+ * @param path 文件路徑
+ * @param compile_only 是否僅編譯
+ */
 static void run_file(const char* path, bool compile_only) {
-    // 檢查文件後綴
+    /** 檢查文件後綴 */
     const char* ext = strrchr(path, '.');
     if (ext == NULL || (strcmp(ext, ".k") != 0 && strcmp(ext, ".kri") != 0)) {
         printf("Error: File extension must be .k or .kri\n");
         return;
     }
 
-    char* source = read_file(path, false); // Report error
+    char* source = read_file(path, false); /** @brief 報告錯誤 */
     if (source == NULL) return;
 
-    // 1. Lexer
-    // printf("Initializing Lexer...\n");
+    /** @brief 1. 詞法分析 */
+    /** printf("Initializing Lexer...\n"); */
     Lexer lexer;
     init_lexer(&lexer, source);
     
-    // 2. Parser
-    // printf("Initializing Parser...\n");
+    /** @brief 2. 語法分析 */
+    /** printf("Initializing Parser...\n"); */
     Parser parser;
     init_parser(&parser, &lexer);
-    // printf("Parsing Program...\n");
+    /** printf("Parsing Program...\n"); */
     KastProgram* program = parse_program(&parser);
     if (!program) {
         printf("Parsing failed.\n");
         return;
     }
-    // printf("Compiling Program...\n");
+    /** printf("Compiling Program...\n"); */
     
     if (parser.has_error) {
         printf("Parsing failed.\n");
@@ -289,7 +311,7 @@ static void run_file(const char* path, bool compile_only) {
         return;
     }
 
-    // 3. Compile
+    /** @brief 3. 編譯 */
     KBytecodeChunk chunk;
     init_chunk(&chunk);
     
@@ -300,23 +322,23 @@ static void run_file(const char* path, bool compile_only) {
         return;
     }
     
-    // 保存字節碼緩存 (如果需要)
-    // kcache_save("out.kc", &chunk, ...);
+    /** 保存字節碼緩存 (如果需要) */
+    /** kcache_save("out.kc", &chunk, ...); */
 
     if (compile_only) {
         printf("Compilation successful.\n");
-        // free resources
+        /** @brief 釋放資源 */
         free_chunk(&chunk);
         free(source);
         return;
     }
 
-    // 4. Run VM
-    // printf("Compilation finished.\n");
+    /** @brief 4. 運行虛擬機 */
+    /** printf("Compilation finished.\n"); */
     KVM vm;
     kvm_init(&vm);
     
-    // Set root dir
+    /** @brief 設置根目錄 */
     char* last_slash = strrchr(path, '/');
     char* last_backslash = strrchr(path, '\\');
     char* slash = last_slash > last_backslash ? last_slash : last_backslash;
@@ -329,26 +351,26 @@ static void run_file(const char* path, bool compile_only) {
         vm.root_dir = strdup(".");
     }
     
-    // Bind VM to API and register standard libraries
+    /** @brief 將虛擬機綁定到 API 並註冊標準庫 */
     KBindVM(&vm);
     kstd_register();
     vm.import_handler = import_module_handler;
     
-    // Enable JIT (if available)
-    // ComeOnJIT jit;
-    // jit_init(&jit);
+    /** @brief 啟用 JIT（如果可用） */
+    /** ComeOnJIT jit; */
+    /** jit_init(&jit); */
     
-    // 嘗試 JIT 編譯
-    // void* machine_code = jit_compile(&jit, &chunk);
-    // if (machine_code) {
-        // printf("JIT compilation successful. Running native code...\n");
-        // ...
-    // }
+    /** 嘗試 JIT 編譯 */
+    /** void* machine_code = jit_compile(&jit, &chunk); */
+    /** if (machine_code) { */
+        /** printf("JIT compilation successful. Running native code...\n"); */
+        /** ... */
+    /** } */
     
-    // 4. Run
+    /** 4. Run */
     kvm_interpret(&vm, &chunk);
     
-    // Auto-run main() if it exists
+    /** Auto-run main() if it exists */
     if (!vm.had_error) {
         KValue main_func;
         if (table_get(&vm.globals, "main", &main_func) && 
@@ -358,26 +380,26 @@ static void run_file(const char* path, bool compile_only) {
             KBytecodeChunk boot_chunk;
             init_chunk(&boot_chunk);
             
-            // fprintf(stderr, "DEBUG: Calling main...\n");
+            /** fprintf(stderr, "DEBUG: Calling main...\n"); */
 
-            // Add "main" to string table
+            /** Add "main" to string table */
             boot_chunk.string_count = 1;
             boot_chunk.string_table = (char**)malloc(sizeof(char*));
             boot_chunk.string_table[0] = strdup("main");
             
-            // GET_GLOBAL Reg0, "main" (Index 0)
+            /** GET_GLOBAL Reg0, "main" (Index 0) */
             write_chunk(&boot_chunk, KOP_GET_GLOBAL, 0);
-            write_chunk(&boot_chunk, 0, 0); // Reg 0
-            write_chunk(&boot_chunk, 0, 0); // Index 0 (hi)
-            write_chunk(&boot_chunk, 0, 0); // Index 0 (lo)
+            write_chunk(&boot_chunk, 0, 0); /** Reg 0 */
+            write_chunk(&boot_chunk, 0, 0); /** Index 0 (hi) */
+            write_chunk(&boot_chunk, 0, 0); /** Index 0 (lo) */
             
-            // CALLR Reg0, 0 args
+            /** CALLR Reg0, 0 args */
             write_chunk(&boot_chunk, KOP_CALLR, 0);
-            write_chunk(&boot_chunk, 0, 0); // Reg 0 (callee)
-            write_chunk(&boot_chunk, 0, 0); // Arg count 0
-            write_chunk(&boot_chunk, 0, 0); // Padding
+            write_chunk(&boot_chunk, 0, 0); /** Reg 0 (callee) */
+            write_chunk(&boot_chunk, 0, 0); /** Arg count 0 */
+            write_chunk(&boot_chunk, 0, 0); /** Padding */
             
-            // RET
+            /** RET */
             write_chunk(&boot_chunk, KOP_RET, 0);
             write_chunk(&boot_chunk, 0, 0); 
             write_chunk(&boot_chunk, 0, 0); 
@@ -389,30 +411,33 @@ static void run_file(const char* path, bool compile_only) {
         }
     }
 
-    // jit_cleanup(&jit);
+    /** jit_cleanup(&jit); */
     kvm_free(&vm);
     free_chunk(&chunk);
     free(source);
 }
 
-// kembed_init - Initialize the engine
+/** @brief 初始化引擎 */
 void kembed_init() {
-    // KInit initializes the core VM structures
+    /** KInit initializes the core VM structures */
     KInit();
 }
 
-// kembed_cleanup - Cleanup the engine
+/** @brief 清理引擎 */
 void kembed_cleanup() {
     KCleanup();
 }
 
-// kembed_run - Execute a script string
+/**
+ * @brief 執行腳本字符串
+ * @param source 腳本源代碼
+ */
 void kembed_run(const char* source) {
-    // 1. Lexer
+    /** 1. Lexer */
     Lexer lexer;
     init_lexer(&lexer, source);
     
-    // 2. Parser
+    /** 2. Parser */
     Parser parser;
     init_parser(&parser, &lexer);
     KastProgram* program = parse_program(&parser);
@@ -421,7 +446,7 @@ void kembed_run(const char* source) {
         return;
     }
 
-    // 3. Compile
+    /** 3. Compile */
     KBytecodeChunk chunk;
     init_chunk(&chunk);
     
@@ -431,22 +456,22 @@ void kembed_run(const char* source) {
         return;
     }
     
-    // 4. Run VM
+    /** @brief 4. 運行虛擬機 */
     KVM vm;
     kvm_init(&vm);
     
-    // Default root dir to current directory
+    /** @brief 默認根目錄為當前目錄 */
     vm.root_dir = strdup(".");
     
-    // Bind VM to API and register standard libraries
+    /** @brief 將虛擬機綁定到 API 並註冊標準庫 */
     KBindVM(&vm);
     kstd_register();
     vm.import_handler = import_module_handler;
     
-    // Run
+    /** @brief 運行 */
     kvm_interpret(&vm, &chunk);
     
-    // Auto-run main() if it exists
+    /** Auto-run main() if it exists */
     if (!vm.had_error) {
         KValue main_func;
         if (table_get(&vm.globals, "main", &main_func) && 
@@ -456,24 +481,24 @@ void kembed_run(const char* source) {
             KBytecodeChunk boot_chunk;
             init_chunk(&boot_chunk);
             
-            // Add "main" to string table
+            /** Add "main" to string table */
             boot_chunk.string_count = 1;
             boot_chunk.string_table = (char**)malloc(sizeof(char*));
             boot_chunk.string_table[0] = strdup("main");
             
-            // GET_GLOBAL Reg0, "main" (Index 0)
+            /** GET_GLOBAL Reg0, "main" (Index 0) */
             write_chunk(&boot_chunk, KOP_GET_GLOBAL, 0);
-            write_chunk(&boot_chunk, 0, 0); // Reg 0
-            write_chunk(&boot_chunk, 0, 0); // Index 0 (hi)
-            write_chunk(&boot_chunk, 0, 0); // Index 0 (lo)
+            write_chunk(&boot_chunk, 0, 0); /** Reg 0 */
+            write_chunk(&boot_chunk, 0, 0); /** Index 0 (hi) */
+            write_chunk(&boot_chunk, 0, 0); /** Index 0 (lo) */
             
-            // CALLR Reg0, 0 args
+            /** CALLR Reg0, 0 args */
             write_chunk(&boot_chunk, KOP_CALLR, 0);
-            write_chunk(&boot_chunk, 0, 0); // Reg 0 (callee)
-            write_chunk(&boot_chunk, 0, 0); // Arg count 0
-            write_chunk(&boot_chunk, 0, 0); // Padding
+            write_chunk(&boot_chunk, 0, 0); /** Reg 0 (callee) */
+            write_chunk(&boot_chunk, 0, 0); /** Arg count 0 */
+            write_chunk(&boot_chunk, 0, 0); /** Padding */
             
-            // RET
+            /** RET */
             write_chunk(&boot_chunk, KOP_RET, 0);
             write_chunk(&boot_chunk, 0, 0); 
             write_chunk(&boot_chunk, 0, 0); 
@@ -488,7 +513,10 @@ void kembed_run(const char* source) {
     free_chunk(&chunk);
 }
 
-// kembed_run_file - Execute a script file
+/**
+ * @brief 執行腳本文件
+ * @param path 文件路徑
+ */
 void kembed_run_file(const char* path) {
     run_file(path, false);
 }

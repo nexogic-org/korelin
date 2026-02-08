@@ -1,7 +1,3 @@
-//
-// Created by Helix on 2026/1/21.
-//
-
 #include "comeonjit.h"
 #include "kvm.h"
 #include <stdio.h>
@@ -17,10 +13,10 @@
 
 // --- 輔助宏 ---
 
-// REX Prefix fields
-#define REX_W 0x48 // 64-bit operand
+/** @brief REX 前綴字段 */
+#define REX_W 0x48 /**< 64 位操作數 */
 
-// x64 Registers
+/** @brief x64 寄存器定義 */
 #define RAX 0
 #define RCX 1
 #define RDX 2
@@ -30,19 +26,19 @@
 #define RSI 6
 #define RDI 7
 
-// KValue Offsets (Based on KVM struct)
-// type: offset 0 (4 bytes)
-// as: offset 8 (8 bytes)
+/** @brief KValue 偏移量 (基於 KVM 結構體) */
+/**< type: 偏移量 0 (4 字節) */
+/**< as: 偏移量 8 (8 字節) */
 #define OFFSET_KVALUE_TYPE 0
 #define OFFSET_KVALUE_AS   8
 #define SIZE_KVALUE        16
 
-// KVM Offsets
-// registers is a pointer at offset 16 (in 64-bit KVM struct)
-// But we load it into RSI, so relative offset is 0
+/** @brief KVM 偏移量 */
+/**< registers 指針在偏移量 16 (64 位 KVM 結構體) */
+/**< 但我們將其加載到 RSI，因此相對偏移量為 0 */
 #define OFFSET_KVM_REGISTERS 0
 
-// --- 內存管理 ---
+/** @brief 內存管理 */
 
 void jit_init(ComeOnJIT* jit) {
     jit->enabled = true;
@@ -93,7 +89,7 @@ static uint8_t* jit_alloc(ComeOnJIT* jit, size_t size) {
     return ptr;
 }
 
-// --- x64 Emitter ---
+/** @brief x64 發射器 */
 
 #define EMIT_1(b1) *code++ = (b1)
 #define EMIT_2(b1, b2) { *code++ = (b1); *code++ = (b2); }
@@ -101,12 +97,12 @@ static uint8_t* jit_alloc(ComeOnJIT* jit, size_t size) {
 #define EMIT_4(b1, b2, b3, b4) { *code++ = (b1); *code++ = (b2); *code++ = (b3); *code++ = (b4); }
 #define EMIT_INT32(val) { *(int32_t*)code = (val); code += 4; }
 
-// ModR/M helper
-// mod: 2 bits, reg: 3 bits, rm: 3 bits
+/** @brief ModR/M 輔助宏 */
+/**< mod: 2 位, reg: 3 位, rm: 3 位 */
 #define MODRM(mod, reg, rm) ((mod << 6) | (reg << 3) | rm)
 
-// Load Register Value to CPU Register
-// mov cpu_reg, [vm_base + OFFSET_REGISTERS + vm_reg_idx * 16 + 8]
+/** @brief 加載寄存器值到 CPU 寄存器 */
+/**< mov cpu_reg, [vm_base + OFFSET_REGISTERS + vm_reg_idx * 16 + 8] */
 static void emit_load_reg(uint8_t** ptr, int cpu_reg, int vm_reg_idx, int vm_base_reg) {
     uint8_t* code = *ptr;
     int32_t offset = OFFSET_KVM_REGISTERS + vm_reg_idx * SIZE_KVALUE + OFFSET_KVALUE_AS;
@@ -120,8 +116,8 @@ static void emit_load_reg(uint8_t** ptr, int cpu_reg, int vm_reg_idx, int vm_bas
     *ptr = code;
 }
 
-// Store CPU Register to VM Register
-// mov [vm_base + ... + 8], cpu_reg
+/** @brief 存儲 CPU 寄存器到 VM 寄存器 */
+/**< mov [vm_base + ... + 8], cpu_reg */
 static void emit_store_reg(uint8_t** ptr, int cpu_reg, int vm_reg_idx, int vm_base_reg) {
     uint8_t* code = *ptr;
     int32_t offset = OFFSET_KVM_REGISTERS + vm_reg_idx * SIZE_KVALUE + OFFSET_KVALUE_AS;
@@ -134,8 +130,8 @@ static void emit_store_reg(uint8_t** ptr, int cpu_reg, int vm_reg_idx, int vm_ba
     *ptr = code;
 }
 
-// Set VM Register Type to INT
-// mov dword ptr [vm_base + ...], VAL_INT
+/** @brief 設置 VM 寄存器類型為 INT */
+/**< mov dword ptr [vm_base + ...], VAL_INT */
 static void emit_set_type_int(uint8_t** ptr, int vm_reg_idx, int vm_base_reg) {
     uint8_t* code = *ptr;
     int32_t offset = OFFSET_KVM_REGISTERS + vm_reg_idx * SIZE_KVALUE + OFFSET_KVALUE_TYPE;
@@ -149,12 +145,12 @@ static void emit_set_type_int(uint8_t** ptr, int vm_reg_idx, int vm_base_reg) {
     *ptr = code;
 }
 
-// --- JIT Compilation ---
+/** @brief JIT 編譯 */
 
-// Jump Fixup Structure
+/** @brief 跳轉修復結構體 */
 typedef struct {
-    int jump_inst_offset; // Offset in machine code where the relative jump starts
-    int target_bytecode_offset; // Target bytecode index
+    int jump_inst_offset; /**< 機器碼中相對跳轉開始的偏移量 */
+    int target_bytecode_offset; /**< 目標字節碼索引 */
 } JumpFixup;
 
 void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
@@ -166,34 +162,34 @@ void* jit_compile(ComeOnJIT* jit, KBytecodeChunk* chunk) {
 
     uint8_t* code = start_addr;
     
-    // Map bytecode offset to machine code offset
-    // -1 means not yet generated
+    // 映射字節碼偏移到機器碼偏移
+    // -1 表示尚未生成
     int* bc_to_mc = (int*)malloc(chunk->count * sizeof(int));
     for(size_t i=0; i<chunk->count; i++) bc_to_mc[i] = -1;
 
-    // Jump fixups
-    JumpFixup fixups[256]; // Simple fixed size for demo
+    // 跳轉修復
+    JumpFixup fixups[256]; // 演示用的簡單固定大小
     int fixup_count = 0;
 
-    // Determine VM pointer register
+    // 確定 VM 指針寄存器
 #ifdef _WIN32
-    int vm_reg = RCX; // Windows: 1st arg in RCX
+    int vm_reg = RCX; // Windows: 第 1 個參數在 RCX
 #else
-    int vm_reg = RDI; // SysV: 1st arg in RDI
+    int vm_reg = RDI; // SysV: 第 1 個參數在 RDI
 #endif
 
-    // Prologue
+    // 序言 (Prologue)
     EMIT_1(0x55); // push rbp
     EMIT_3(0x48, 0x89, 0xE5); // mov rbp, rsp
-    EMIT_1(0x53); // push rbx (callee saved)
-    EMIT_1(0x56); // push rsi (callee saved on Win, scratch on SysV, used as base)
+    EMIT_1(0x53); // push rbx (被調用者保存)
+    EMIT_1(0x56); // push rsi (Windows 上被調用者保存，SysV 上為臨時，用作基址)
 
-    // Load vm->registers (offset 16) into RSI
+    // 加載 vm->registers (偏移 16) 到 RSI
     // MOV RSI, [vm_reg + 16]
     EMIT_1(REX_W);
     EMIT_1(0x8B);
-    EMIT_1(MODRM(1, RSI, vm_reg)); // Mod=1 for 8-bit disp
-    EMIT_1(16); // Disp
+    EMIT_1(MODRM(1, RSI, vm_reg)); // Mod=1 用於 8 位偏移
+    EMIT_1(16); // 偏移
 
     uint8_t* ip = chunk->code;
     uint8_t* end = chunk->code + chunk->count;

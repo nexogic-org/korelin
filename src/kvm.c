@@ -1,7 +1,3 @@
-//
-// Created by Helix on 2026/1/10.
-//
-
 #include "kvm.h"
 #include "kcode.h"
 #include "kgc.h" 
@@ -11,17 +7,18 @@
 #include <string.h>
 #include <math.h>
 
-// Move macro definitions to top or define before usage
+// 宏定義
 #define REG(idx) (vm->registers[idx])
 
-// Forward Declarations
+/**
+ * @brief 前向聲明
+ */
 static bool call_value(KVM* vm, KValue callee, int arg_count, int return_reg);
 static bool call(KVM* vm, KObjFunction* function, int arg_count, int return_reg);
 static bool throw_runtime_error_obj(KVM* vm, const char* type, const char* msg);
 static void print_runtime_error_context(KVM* vm);
 
-
-// Moved macros to top
+// 運行時錯誤宏
 #define RUNTIME_ERROR(msg) \
     { \
         /* printf("Debug: RUNTIME_ERROR triggered: %s\n", msg); */ \
@@ -44,8 +41,9 @@ static void print_runtime_error_context(KVM* vm);
         break; \
     }
 
-
-// --- Table Implementation ---
+/**
+ * @brief 符號表實現
+ */
 void init_table(KTable* table) {
     table->count = 0;
     table->capacity = 0;
@@ -411,6 +409,24 @@ static void print_runtime_error_context(KVM* vm) {
         } \
         REG(rd).type = VAL_INT; \
         REG(rd).as.integer = REG_AS_INT(ra) op REG_AS_INT(rb); \
+    } while(0)
+
+#define BINARY_OP_LOGICAL(op) \
+    do { \
+        uint8_t rd = READ_REG_IDX(); \
+        uint8_t ra = READ_REG_IDX(); \
+        uint8_t rb = READ_REG_IDX(); \
+        KValue va = REG(ra); \
+        KValue vb = REG(rb); \
+        if (va.type == VAL_BOOL && vb.type == VAL_BOOL) { \
+            REG(rd).type = VAL_BOOL; \
+            REG(rd).as.boolean = va.as.boolean op vb.as.boolean; \
+        } else if (va.type == VAL_INT && vb.type == VAL_INT) { \
+            REG(rd).type = VAL_INT; \
+            REG(rd).as.integer = va.as.integer op vb.as.integer; \
+        } else { \
+            THROW_ERROR("TypeMismatchError", "Operands must be integers or booleans"); \
+        } \
     } while(0)
 
 #define BINARY_OP_NUM(op) \
@@ -925,9 +941,26 @@ int kvm_run(KVM* vm) {
             }
             
 
-            case KOP_AND: BINARY_OP_INT(&); break;
-            case KOP_OR:  BINARY_OP_INT(|); break;
-            case KOP_XOR: BINARY_OP_INT(^); break;
+            case KOP_AND: BINARY_OP_LOGICAL(&); break;
+            case KOP_OR:  BINARY_OP_LOGICAL(|); break;
+            case KOP_XOR: BINARY_OP_LOGICAL(^); break;
+            
+            case KOP_NOT: {
+                uint8_t rd = READ_REG_IDX();
+                uint8_t ra = READ_REG_IDX();
+                READ_BYTE(); // Padding
+                KValue va = REG(ra);
+                if (va.type == VAL_BOOL) {
+                    REG(rd).type = VAL_BOOL;
+                    REG(rd).as.boolean = !va.as.boolean;
+                } else if (va.type == VAL_INT) {
+                    REG(rd).type = VAL_INT;
+                    REG(rd).as.integer = ~va.as.integer;
+                } else {
+                    THROW_ERROR("TypeMismatchError", "Operand must be boolean or integer");
+                }
+                break;
+            }
             
             // --- 2.2 浮點數 ---
             case KOP_FADD_D: BINARY_OP_DOUBLE(+); break;

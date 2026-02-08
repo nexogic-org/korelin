@@ -1,22 +1,49 @@
-//
-// Created by Helix on 2026/1/10.
-//
-
 #include "kvm.h"
 #include "kcode.h"
+#include "kgc.h" 
+#include "comeonjit.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-// Move macro definitions to top or define before usage
+// 宏定義
 #define REG(idx) (vm->registers[idx])
 
-// Forward Declarations
+/**
+ * @brief 前向聲明
+ */
 static bool call_value(KVM* vm, KValue callee, int arg_count, int return_reg);
 static bool call(KVM* vm, KObjFunction* function, int arg_count, int return_reg);
+static bool throw_runtime_error_obj(KVM* vm, const char* type, const char* msg);
+static void print_runtime_error_context(KVM* vm);
 
-// --- Table Implementation ---
+// 運行時錯誤宏
+#define RUNTIME_ERROR(msg) \
+    { \
+        /* printf("Debug: RUNTIME_ERROR triggered: %s\n", msg); */ \
+        if (!throw_runtime_error_obj(vm, "RuntimeError", msg)) { \
+            printf("\n[RuntimeError] %s\n", msg); \
+            print_runtime_error_context(vm); \
+            vm->had_error = true; \
+            return 1; \
+        } \
+        break; \
+    }
+
+#define THROW_ERROR(type, msg) \
+    { \
+        if (!throw_runtime_error_obj(vm, type, msg)) { \
+            printf("Runtime Error (%s): %s\n", type, msg); \
+            vm->had_error = true; \
+            return 1; \
+        } \
+        break; \
+    }
+
+/**
+ * @brief 符號表實現
+ */
 void init_table(KTable* table) {
     table->count = 0;
     table->capacity = 0;
@@ -140,9 +167,14 @@ static bool call(KVM* vm, KObjFunction* function, int arg_count, int return_reg)
     }
 
     if (arg_count != function->arity) {
-        printf("Runtime Error: Expected %d arguments but got %d.\n", function->arity, arg_count);
-        vm->had_error = true;
-        return false;
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Expected %d arguments but got %d", function->arity, arg_count);
+        if (!throw_runtime_error_obj(vm, "IllegalArgumentError", msg)) {
+            printf("Runtime Error (IllegalArgumentError): %s\n", msg);
+            vm->had_error = true;
+            return false;
+        }
+        return true;
     }
 
     if (vm->frame_count >= KVM_MAX_FRAMES) {
@@ -170,8 +202,16 @@ static bool call(KVM* vm, KObjFunction* function, int arg_count, int return_reg)
     
     // New register window starts at arguments
     vm->registers = vm->stack_top - arg_count;
+    
+    // Check stack overflow before moving stack_top
+    if (vm->registers + KVM_REGISTERS_MAX - vm->stack >= KVM_STACK_SIZE) {
+        printf("Runtime Error: Stack overflow (memory limit).\n");
+        vm->had_error = true;
+        return false;
+    }
+    
     // Reserve space for locals
-    vm->stack_top = vm->registers + 64; 
+    vm->stack_top = vm->registers + KVM_REGISTERS_MAX; 
 
     /* JIT Disabled
     // Try JIT Compilation for the called function
@@ -240,23 +280,6 @@ static bool call_value(KVM* vm, KValue callee, int arg_count, int return_reg) {
                 func();
                 
                 // Stack cleanup:
-                // Native func pushed 1 result (or void/null)
-                // Result is at stack_top - 1
-                // Wait, native functions use KReturnXXX which pushes to stack?
-                // Yes, KReturnVoid pushes null? No, KReturnVoid might push nothing?
-                // Let's assume standard is 1 result.
-                // If KReturnVoid does nothing, stack_top is same.
-                // But we need to cleanup args.
-                
-                // NOTE: We rely on native functions to leave exactly 1 result on stack if they return value?
-                // KReturnXXX pushes 1 value.
-                // KReturnVoid pushes nothing?
-                // Let's check kapi.h or usage.
-                // Standard convention: Native function should push 1 result.
-                // If KReturnVoid pushes VAL_NULL, then we pop 1.
-                // If KReturnVoid pushes nothing, we need to push NULL.
-                
-                // Assuming result is on stack top.
                 KValue result = *(vm->stack_top - 1);
                 vm->stack_top--; // Pop result
                 
@@ -323,25 +346,57 @@ KValue kvm_pop(KVM* vm) {
 #define REG_AS_INT(idx) (vm->registers[idx].as.integer)
 #define REG_AS_DOUBLE(idx) (vm->registers[idx].as.double_prec)
 
-#define RUNTIME_ERROR(msg) \
-    { \
-        if (!throw_runtime_error_obj(vm, "RuntimeError", msg)) { \
-            printf("Runtime Error: %s\n", msg); \
-            vm->had_error = true; \
-            return 1; \
-        } \
-        break; \
+static void print_runtime_error_context(KVM* vm) {
+    // printf("Debug: print_runtime_error_context called. vm=%p\n", vm);
+    if (!vm || !vm->chunk || !vm->chunk->lines || !vm->chunk->code) {
+        // printf("Debug: Invalid vm state\n");
+        return;
     }
+    
+    // Calculate offset. 
+    size_t offset = 0;
+    if (vm->ip > vm->chunk->code) {
+        offset = vm->ip - vm->chunk->code - 1;
+    }
+    
+    if (offset >= vm->chunk->count) offset = vm->chunk->count > 0 ? vm->chunk->count - 1 : 0;
+    
+    int line = vm->chunk->lines[offset];
+    // printf("Debug: offset=%zu, line=%d\n", offset, line);
+    if (line == 0) return; // Unknown line
+    
+    const char* filename = (vm->chunk->filename) ? vm->chunk->filename : "script";
+    // printf("Debug: filename=%s\n", filename);
+    
+    printf("   %s:%d\n", filename, line);
+    
+    if (vm->chunk->filename) {
+        FILE* file = fopen(vm->chunk->filename, "r");
+        if (file) {
+            char buffer[1024];
+            int current_line = 1;
+            while (fgets(buffer, sizeof(buffer), file)) {
+                // Remove trailing newline chars including \r
+                size_t len = strlen(buffer);
+                while (len > 0 && (buffer[len-1] == '\n' || buffer[len-1] == '\r')) {
+                    buffer[--len] = '\0';
+                }
 
-#define THROW_ERROR(type, msg) \
-    { \
-        if (!throw_runtime_error_obj(vm, type, msg)) { \
-            printf("Runtime Error (%s): %s\n", type, msg); \
-            vm->had_error = true; \
-            return 1; \
-        } \
-        break; \
+                if (current_line == line) {
+                    printf("   %d | %s\n", line, buffer);
+                    printf("     | ^\n\n");
+                    break;
+                }
+                current_line++;
+            }
+            fclose(file);
+        } else {
+            // printf("Debug: Failed to open file\n");
+        }
     }
+}
+
+
 
 #define BINARY_OP_INT(op) \
     do { \
@@ -350,10 +405,50 @@ KValue kvm_pop(KVM* vm) {
         uint8_t rb = READ_REG_IDX(); \
         if (REG(ra).type != VAL_INT || REG(rb).type != VAL_INT) { \
             printf("Type Error: Ra=%d, Rb=%d\n", REG(ra).type, REG(rb).type); \
-            RUNTIME_ERROR("Operands must be integers"); \
+            THROW_ERROR("TypeMismatchError", "Operands must be integers"); \
         } \
         REG(rd).type = VAL_INT; \
         REG(rd).as.integer = REG_AS_INT(ra) op REG_AS_INT(rb); \
+    } while(0)
+
+#define BINARY_OP_LOGICAL(op) \
+    do { \
+        uint8_t rd = READ_REG_IDX(); \
+        uint8_t ra = READ_REG_IDX(); \
+        uint8_t rb = READ_REG_IDX(); \
+        KValue va = REG(ra); \
+        KValue vb = REG(rb); \
+        if (va.type == VAL_BOOL && vb.type == VAL_BOOL) { \
+            REG(rd).type = VAL_BOOL; \
+            REG(rd).as.boolean = va.as.boolean op vb.as.boolean; \
+        } else if (va.type == VAL_INT && vb.type == VAL_INT) { \
+            REG(rd).type = VAL_INT; \
+            REG(rd).as.integer = va.as.integer op vb.as.integer; \
+        } else { \
+            THROW_ERROR("TypeMismatchError", "Operands must be integers or booleans"); \
+        } \
+    } while(0)
+
+#define BINARY_OP_NUM(op) \
+    do { \
+        uint8_t rd = READ_REG_IDX(); \
+        uint8_t ra = READ_REG_IDX(); \
+        uint8_t rb = READ_REG_IDX(); \
+        KValue va = REG(ra); \
+        KValue vb = REG(rb); \
+        if (va.type == VAL_INT && vb.type == VAL_INT) { \
+            REG(rd).type = VAL_INT; \
+            REG(rd).as.integer = va.as.integer op vb.as.integer; \
+        } else if ((va.type == VAL_INT || va.type == VAL_FLOAT || va.type == VAL_DOUBLE) && \
+                   (vb.type == VAL_INT || vb.type == VAL_FLOAT || vb.type == VAL_DOUBLE)) { \
+            double da = (va.type == VAL_INT) ? (double)va.as.integer : (va.type == VAL_FLOAT ? va.as.single_prec : va.as.double_prec); \
+            double db = (vb.type == VAL_INT) ? (double)vb.as.integer : (vb.type == VAL_FLOAT ? vb.as.single_prec : vb.as.double_prec); \
+            REG(rd).type = VAL_DOUBLE; \
+            REG(rd).as.double_prec = da op db; \
+        } else { \
+            printf("Type Error: Ra=%d, Rb=%d\n", va.type, vb.type); \
+            THROW_ERROR("TypeMismatchError", "Operands must be numbers"); \
+        } \
     } while(0)
 
 #define BINARY_OP_DOUBLE(op) \
@@ -432,12 +527,7 @@ static bool values_equal(KValue a, KValue b) {
 
 // Helper for string concat
 static KObjString* alloc_string(KVM* vm, const char* chars, int length) {
-    KObjString* str = (KObjString*)malloc(sizeof(KObjString));
-    str->header.type = OBJ_STRING;
-    str->header.marked = false;
-    str->header.next = vm->objects;
-    str->header.size = sizeof(KObjString) + length + 1;
-    vm->objects = (KObjHeader*)str;
+    KObjString* str = (KObjString*)kgc_alloc(vm->gc, sizeof(KObjString), OBJ_STRING);
     
     str->length = length;
     str->chars = (char*)malloc(length + 1);
@@ -445,6 +535,21 @@ static KObjString* alloc_string(KVM* vm, const char* chars, int length) {
     str->chars[length] = '\0';
     str->hash = 0; 
     return str;
+}
+
+KObjArray* alloc_array(KVM* vm, int length) {
+    KObjArray* arr = (KObjArray*)kgc_alloc(vm->gc, sizeof(KObjArray), OBJ_ARRAY);
+    
+    arr->length = length;
+    arr->capacity = length;
+    if (length > 0) {
+        arr->elements = (KValue*)malloc(sizeof(KValue) * length);
+        // Init with NULL
+        for (int i=0; i<length; i++) arr->elements[i].type = VAL_NULL;
+    } else {
+        arr->elements = NULL;
+    }
+    return arr;
 }
 
 static char* value_to_string_kvm(KValue v) {
@@ -487,17 +592,47 @@ void kvm_init(KVM* vm) {
     
     init_table(&vm->globals);
     init_table(&vm->modules);
+    init_table(&vm->lib_paths);
     vm->current_module = NULL;
-    // // jit_init(&vm->jit);
+    
+    // JIT Init
+    vm->jit = (ComeOnJIT*)malloc(sizeof(ComeOnJIT));
+    if (vm->jit) {
+        jit_init(vm->jit);
+        vm->jit->enabled = false; // Disable for debugging
+    }
+
     vm->import_handler = NULL;
     vm->root_dir = NULL;
+    
+    // Init GC
+    vm->objects = NULL;
+    vm->gc = (KGC*)malloc(sizeof(KGC));
+    kgc_init(vm->gc, vm);
+
+    init_table(&vm->globals);
+    init_table(&vm->modules);
+    init_table(&vm->lib_paths);
 }
 
 void kvm_free(KVM* vm) {
     free_table(&vm->globals);
     free_table(&vm->modules);
-    // // jit_cleanup(&vm->jit);
+    free_table(&vm->lib_paths);
+    
+    if (vm->jit) {
+        jit_cleanup(vm->jit);
+        free(vm->jit);
+    }
+    
     // 釋放任何動態分配的資源 (如果有的話)
+    
+    // Free GC
+    if (vm->gc) {
+        kgc_free(vm->gc);
+        free(vm->gc);
+        vm->gc = NULL;
+    }
 }
 
 void kvm_print_value(KValue value) {
@@ -552,12 +687,7 @@ static bool throw_runtime_error_obj(KVM* vm, const char* type, const char* msg) 
         klass = (KObjClass*)class_val.as.obj;
     }
     
-    KObjInstance* ex = (KObjInstance*)malloc(sizeof(KObjInstance));
-    ex->header.type = OBJ_CLASS_INSTANCE;
-    ex->header.marked = false;
-    ex->header.next = vm->objects;
-    ex->header.size = sizeof(KObjInstance);
-    vm->objects = (KObjHeader*)ex;
+    KObjInstance* ex = (KObjInstance*)kgc_alloc(vm->gc, sizeof(KObjInstance), OBJ_CLASS_INSTANCE);
     ex->klass = klass;
     init_table(&ex->fields);
     
@@ -667,28 +797,56 @@ int kvm_run(KVM* vm) {
                     REG(rd).as.integer = va.as.integer + vb.as.integer;
                 } else {
                     printf("Type Error: Ra=%d, Rb=%d\n", va.type, vb.type);
-                    RUNTIME_ERROR("Operands must be numbers or strings");
+                    THROW_ERROR("TypeMismatchError", "Operands must be numbers or strings");
                 }
                 break;
             }
-            case KOP_SUB: BINARY_OP_INT(-); break;
-            case KOP_MUL: BINARY_OP_INT(*); break;
+            case KOP_SUB: BINARY_OP_NUM(-); break;
+            case KOP_MUL: BINARY_OP_NUM(*); break;
             case KOP_DIV: {
                 uint8_t rd = READ_REG_IDX();
                 uint8_t ra = READ_REG_IDX();
                 uint8_t rb = READ_REG_IDX();
-                if (REG_AS_INT(rb) == 0) THROW_ERROR("DivisionByZeroError", "Division by zero");
-                REG(rd).type = VAL_INT;
-                REG(rd).as.integer = REG_AS_INT(ra) / REG_AS_INT(rb);
+                KValue va = REG(ra);
+                KValue vb = REG(rb);
+                
+                if (va.type == VAL_INT && vb.type == VAL_INT) {
+                    if (vb.as.integer == 0) THROW_ERROR("DivisionByZeroError", "Division by zero");
+                    REG(rd).type = VAL_INT;
+                    REG(rd).as.integer = va.as.integer / vb.as.integer;
+                } else if ((va.type == VAL_INT || va.type == VAL_FLOAT || va.type == VAL_DOUBLE) &&
+                           (vb.type == VAL_INT || vb.type == VAL_FLOAT || vb.type == VAL_DOUBLE)) {
+                    double da = (va.type == VAL_INT) ? (double)va.as.integer : (va.type == VAL_FLOAT ? va.as.single_prec : va.as.double_prec);
+                    double db = (vb.type == VAL_INT) ? (double)vb.as.integer : (vb.type == VAL_FLOAT ? vb.as.single_prec : vb.as.double_prec);
+                    if (db == 0.0) THROW_ERROR("DivisionByZeroError", "Division by zero");
+                    REG(rd).type = VAL_DOUBLE;
+                    REG(rd).as.double_prec = da / db;
+                } else {
+                    THROW_ERROR("TypeMismatchError", "Operands must be numbers");
+                }
                 break;
             }
             case KOP_MOD: {
                 uint8_t rd = READ_REG_IDX();
                 uint8_t ra = READ_REG_IDX();
                 uint8_t rb = READ_REG_IDX();
-                if (REG_AS_INT(rb) == 0) THROW_ERROR("DivisionByZeroError", "Modulo by zero");
-                REG(rd).type = VAL_INT;
-                REG(rd).as.integer = REG_AS_INT(ra) % REG_AS_INT(rb);
+                KValue va = REG(ra);
+                KValue vb = REG(rb);
+                
+                if (va.type == VAL_INT && vb.type == VAL_INT) {
+                    if (vb.as.integer == 0) THROW_ERROR("DivisionByZeroError", "Modulo by zero");
+                    REG(rd).type = VAL_INT;
+                    REG(rd).as.integer = va.as.integer % vb.as.integer;
+                } else if ((va.type == VAL_INT || va.type == VAL_FLOAT || va.type == VAL_DOUBLE) &&
+                           (vb.type == VAL_INT || vb.type == VAL_FLOAT || vb.type == VAL_DOUBLE)) {
+                    double da = (va.type == VAL_INT) ? (double)va.as.integer : (va.type == VAL_FLOAT ? va.as.single_prec : va.as.double_prec);
+                    double db = (vb.type == VAL_INT) ? (double)vb.as.integer : (vb.type == VAL_FLOAT ? vb.as.single_prec : vb.as.double_prec);
+                    if (db == 0.0) THROW_ERROR("DivisionByZeroError", "Modulo by zero");
+                    REG(rd).type = VAL_DOUBLE;
+                    REG(rd).as.double_prec = fmod(da, db);
+                } else {
+                    RUNTIME_ERROR("Operands must be numbers");
+                }
                 break;
             }
             case KOP_NEG: {
@@ -783,9 +941,26 @@ int kvm_run(KVM* vm) {
             }
             
 
-            case KOP_AND: BINARY_OP_INT(&); break;
-            case KOP_OR:  BINARY_OP_INT(|); break;
-            case KOP_XOR: BINARY_OP_INT(^); break;
+            case KOP_AND: BINARY_OP_LOGICAL(&); break;
+            case KOP_OR:  BINARY_OP_LOGICAL(|); break;
+            case KOP_XOR: BINARY_OP_LOGICAL(^); break;
+            
+            case KOP_NOT: {
+                uint8_t rd = READ_REG_IDX();
+                uint8_t ra = READ_REG_IDX();
+                READ_BYTE(); // Padding
+                KValue va = REG(ra);
+                if (va.type == VAL_BOOL) {
+                    REG(rd).type = VAL_BOOL;
+                    REG(rd).as.boolean = !va.as.boolean;
+                } else if (va.type == VAL_INT) {
+                    REG(rd).type = VAL_INT;
+                    REG(rd).as.integer = ~va.as.integer;
+                } else {
+                    THROW_ERROR("TypeMismatchError", "Operand must be boolean or integer");
+                }
+                break;
+            }
             
             // --- 2.2 浮點數 ---
             case KOP_FADD_D: BINARY_OP_DOUBLE(+); break;
@@ -858,7 +1033,7 @@ int kvm_run(KVM* vm) {
                 uint8_t arg_count = READ_BYTE();
                 READ_BYTE(); // Padding
                 
-                if (vm->frame_count >= KVM_MAX_FRAMES) RUNTIME_ERROR("Stack overflow");
+                if (vm->frame_count >= KVM_MAX_FRAMES) RUNTIME_ERROR("Stack overflow (Frames)");
                 
                 // Pass rd as return_reg
                 if (!call_value(vm, REG(rd), arg_count, rd)) {
@@ -881,7 +1056,7 @@ int kvm_run(KVM* vm) {
                     REG(rd) = val;
                 } else {
                     printf("Undefined global: %s\n", key);
-                    RUNTIME_ERROR("Undefined global variable");
+                    THROW_ERROR("NameDefineError", "Undefined global variable");
                 }
                 break;
             }
@@ -986,12 +1161,7 @@ int kvm_run(KVM* vm) {
                 
                 char* name = vm->chunk->string_table[name_id];
                 
-                KObjFunction* func = (KObjFunction*)malloc(sizeof(KObjFunction));
-                func->header.type = OBJ_FUNCTION;
-                func->header.marked = false;
-                func->header.next = vm->objects;
-                func->header.size = sizeof(KObjFunction);
-                vm->objects = (KObjHeader*)func;
+                KObjFunction* func = (KObjFunction*)kgc_alloc(vm->gc, sizeof(KObjFunction), OBJ_FUNCTION);
                 
                 func->name = strdup(name);
                 func->arity = arity;
@@ -1117,20 +1287,14 @@ int kvm_run(KVM* vm) {
                 
                 if (!resolve_dotted_name(vm, type_name, &target_val)) {
                      printf("Runtime Error: Undefined type or function '%s'\n", type_name);
-                     vm->had_error = true;
-                     return 1;
+                     THROW_ERROR("NameDefineError", "Undefined type or function");
                 }
                 
                 if (target_val.type == VAL_OBJ && ((KObj*)target_val.as.obj)->header.type == OBJ_CLASS) {
                     // Class Instantiation
                     KObjClass* klass = (KObjClass*)target_val.as.obj;
                     
-                    KObjInstance* inst = (KObjInstance*)malloc(sizeof(KObjInstance));
-                    inst->header.type = OBJ_CLASS_INSTANCE;
-                    inst->header.marked = false;
-                    inst->header.next = vm->objects;
-                    inst->header.size = sizeof(KObjInstance);
-                    vm->objects = (KObjHeader*)inst;
+                    KObjInstance* inst = (KObjInstance*)kgc_alloc(vm->gc, sizeof(KObjInstance), OBJ_CLASS_INSTANCE);
                     
                     init_table(&inst->fields);
                     inst->klass = klass;
@@ -1202,26 +1366,59 @@ int kvm_run(KVM* vm) {
             case KOP_NEWA: { // NEWA Rd, SizeReg
                 uint8_t rd = READ_REG_IDX();
                 uint8_t rs = READ_REG_IDX();
-                READ_BYTE(); // padding
+                uint16_t type_id = READ_IMM16();
                 
-                if (REG(rs).type != VAL_INT) RUNTIME_ERROR("Array size must be integer");
+                if (REG(rs).type != VAL_INT) THROW_ERROR("TypeMismatchError", "Array size must be integer");
                 int size = (int)REG_AS_INT(rs);
                 if (size < 0) RUNTIME_ERROR("Negative array size");
                 
-                KObjArray* arr = (KObjArray*)malloc(sizeof(KObjArray));
+                KObjArray* arr = (KObjArray*)kgc_alloc(vm->gc, sizeof(KObjArray), OBJ_ARRAY);
                 if (!arr) RUNTIME_ERROR("Memory allocation failed");
                 
                 // Init header
-                arr->header.type = OBJ_ARRAY;
-                arr->header.marked = false;
-                arr->header.next = NULL;
-                arr->header.size = sizeof(KObjArray) + size * sizeof(KValue);
+                // kgc_alloc sets type, marked, size, next
                 
                 arr->length = size;
+                arr->capacity = size; // Initialize capacity!
                 arr->elements = (KValue*)calloc(size, sizeof(KValue));
                 if (!arr->elements && size > 0) {
-                    free(arr);
+                    // free(arr); // Let GC handle it or HeapFree
                     RUNTIME_ERROR("Memory allocation failed");
+                }
+                
+                // Initialize elements based on type
+                char* type_name = vm->chunk->string_table[type_id];
+                
+                KValue class_val;
+                KObjClass* klass = NULL;
+                // Try to resolve type as class (for Structs/Classes)
+                if (table_get(&vm->globals, type_name, &class_val) && 
+                    class_val.type == VAL_OBJ && 
+                    ((KObj*)class_val.as.obj)->header.type == OBJ_CLASS) {
+                    klass = (KObjClass*)class_val.as.obj;
+                }
+
+                for (int i=0; i<size; i++) {
+                    if (klass) {
+                        // Instantiate Struct/Class
+                        KObjInstance* inst = (KObjInstance*)kgc_alloc(vm->gc, sizeof(KObjInstance), OBJ_CLASS_INSTANCE);
+                        init_table(&inst->fields);
+                        inst->klass = klass;
+                        
+                        arr->elements[i].type = VAL_OBJ;
+                        arr->elements[i].as.obj = (KObj*)inst;
+                    } else if (strcmp(type_name, "int") == 0) {
+                        arr->elements[i].type = VAL_INT;
+                        arr->elements[i].as.integer = 0;
+                    } else if (strcmp(type_name, "float") == 0) {
+                        arr->elements[i].type = VAL_FLOAT;
+                        arr->elements[i].as.single_prec = 0.0f;
+                    } else if (strcmp(type_name, "bool") == 0) {
+                        arr->elements[i].type = VAL_BOOL;
+                        arr->elements[i].as.boolean = false;
+                    } else {
+                        arr->elements[i].type = VAL_NULL;
+                    }
                 }
                 
                 REG(rd).type = VAL_OBJ;
@@ -1234,13 +1431,14 @@ int kvm_run(KVM* vm) {
                 uint8_t ra = READ_REG_IDX();
                 uint8_t rb = READ_REG_IDX();
                 
-                if (REG(ra).type != VAL_OBJ) RUNTIME_ERROR("Expected array");
+                if (REG(ra).type == VAL_NULL) THROW_ERROR("NilReferenceError", "Expected array");
+                if (REG(ra).type != VAL_OBJ) THROW_ERROR("TypeMismatchError", "Expected array");
                 KObjArray* arr = (KObjArray*)REG(ra).as.obj;
-                if (!arr || arr->header.type != OBJ_ARRAY) RUNTIME_ERROR("Expected array object");
+                if (!arr || arr->header.type != OBJ_ARRAY) THROW_ERROR("TypeMismatchError", "Expected array object");
                 
-                if (REG(rb).type != VAL_INT) RUNTIME_ERROR("Index must be integer");
+                if (REG(rb).type != VAL_INT) THROW_ERROR("TypeMismatchError", "Index must be integer");
                 int index = (int)REG_AS_INT(rb);
-                if (index < 0 || index >= arr->length) RUNTIME_ERROR("Index out of bounds");
+                if (index < 0 || index >= arr->length) THROW_ERROR("IndexOutOfBoundsError", "Index out of bounds");
                 
                 REG(rd) = arr->elements[index];
                 break;
@@ -1251,13 +1449,14 @@ int kvm_run(KVM* vm) {
                 uint8_t rb = READ_REG_IDX();
                 uint8_t rc = READ_REG_IDX();
                 
-                if (REG(ra).type != VAL_OBJ) RUNTIME_ERROR("Expected array");
+                if (REG(ra).type == VAL_NULL) THROW_ERROR("NilReferenceError", "Expected array");
+                if (REG(ra).type != VAL_OBJ) THROW_ERROR("TypeMismatchError", "Expected array");
                 KObjArray* arr = (KObjArray*)REG(ra).as.obj;
-                if (!arr || arr->header.type != OBJ_ARRAY) RUNTIME_ERROR("Expected array object");
+                if (!arr || arr->header.type != OBJ_ARRAY) THROW_ERROR("TypeMismatchError", "Expected array object");
                 
-                if (REG(rb).type != VAL_INT) RUNTIME_ERROR("Index must be integer");
+                if (REG(rb).type != VAL_INT) THROW_ERROR("TypeMismatchError", "Index must be integer");
                 int index = (int)REG_AS_INT(rb);
-                if (index < 0 || index >= arr->length) RUNTIME_ERROR("Index out of bounds");
+                if (index < 0 || index >= arr->length) THROW_ERROR("IndexOutOfBoundsError", "Index out of bounds");
                 
                 arr->elements[index] = REG(rc);
                 break;
@@ -1268,9 +1467,10 @@ int kvm_run(KVM* vm) {
                 uint8_t ra = READ_REG_IDX();
                 READ_BYTE(); // padding
                 
-                if (REG(ra).type != VAL_OBJ) RUNTIME_ERROR("Expected array");
+                if (REG(ra).type == VAL_NULL) THROW_ERROR("NilReferenceError", "Expected array");
+                if (REG(ra).type != VAL_OBJ) THROW_ERROR("TypeMismatchError", "Expected array");
                 KObjArray* arr = (KObjArray*)REG(ra).as.obj;
-                if (!arr || arr->header.type != OBJ_ARRAY) RUNTIME_ERROR("Expected array object");
+                if (!arr || arr->header.type != OBJ_ARRAY) THROW_ERROR("TypeMismatchError", "Expected array object");
                 
                 REG(rd).type = VAL_INT;
                 REG(rd).as.integer = arr->length;
@@ -1282,8 +1482,11 @@ int kvm_run(KVM* vm) {
                 uint8_t ra = READ_REG_IDX(); // Object
                 uint16_t id = READ_IMM16(); // String ID
                 
+                if (REG(ra).type == VAL_NULL) {
+                    THROW_ERROR("NilReferenceError", "GETF target is nil");
+                }
                 if (REG(ra).type != VAL_OBJ) {
-                    RUNTIME_ERROR("GETF target must be object");
+                    THROW_ERROR("TypeMismatchError", "GETF target must be object");
                 }
                 
                 char* key = vm->chunk->string_table[id];
@@ -1292,10 +1495,10 @@ int kvm_run(KVM* vm) {
                 if (obj->header.type == OBJ_CLASS_INSTANCE) {
                     KObjInstance* inst = (KObjInstance*)obj;
                     KValue val;
-                    printf("DEBUG: GETF %s on Instance\n", key);
+                    // printf("DEBUG: GETF %s on Instance\n", key);
                     
                     if (table_get(&inst->fields, key, &val)) {
-                        printf("DEBUG: Found in fields\n");
+                        // printf("DEBUG: Found in fields\n");
                         REG(rd) = val;
                     } else {
                         // Look up method in class chain
@@ -1310,14 +1513,8 @@ int kvm_run(KVM* vm) {
                         }
                         
                         if (found) {
-                             printf("DEBUG: Found in methods, creating BoundMethod\n");
                              // Create Bound Method
-                             KObjBoundMethod* bound = (KObjBoundMethod*)malloc(sizeof(KObjBoundMethod));
-                             bound->header.type = OBJ_BOUND_METHOD;
-                             bound->header.marked = false;
-                             bound->header.next = vm->objects;
-                             bound->header.size = sizeof(KObjBoundMethod);
-                             vm->objects = (KObjHeader*)bound;
+                             KObjBoundMethod* bound = (KObjBoundMethod*)kgc_alloc(vm->gc, sizeof(KObjBoundMethod), OBJ_BOUND_METHOD);
                              
                              bound->receiver = REG(ra);
                              bound->method = (KObjFunction*)val.as.obj;
@@ -1374,10 +1571,45 @@ int kvm_run(KVM* vm) {
                         REG(rd).type = VAL_INT;
                         REG(rd).as.integer = arr->length;
                     } else {
-                        RUNTIME_ERROR("Arrays only have 'length' property");
+                        // Look up methods in Array class
+                        KValue class_val;
+                        if (table_get(&vm->globals, "Array", &class_val) && class_val.type == VAL_OBJ) {
+                            KObjClass* klass = (KObjClass*)class_val.as.obj;
+                             KValue val;
+                             if (table_get(&klass->methods, key, &val)) {
+                                 // Found method, bind it
+                                KObjBoundMethod* bound = (KObjBoundMethod*)kgc_alloc(vm->gc, sizeof(KObjBoundMethod), OBJ_BOUND_METHOD);
+                                
+                                bound->receiver = REG(ra); // The array object
+                                 
+                                 // Ensure val is a function (Native or Script)
+                                 if (val.type == VAL_OBJ && 
+                                     (((KObj*)val.as.obj)->header.type == OBJ_FUNCTION || 
+                                      ((KObj*)val.as.obj)->header.type == OBJ_NATIVE)) {
+                                     // Native functions are wrapped in OBJ_NATIVE
+                                     // But BoundMethod expects KObjFunction* (for script) or KObjNative*?
+                                     // KObjBoundMethod struct definition: KObjFunction* method;
+                                     // Wait, bound method only supports script functions?
+                                     // If it's a native function, we might need a different handling or cast?
+                                     // Let's check KObjBoundMethod definition in kvm.h
+                                     bound->method = (KObjFunction*)val.as.obj; 
+                                     
+                                     KValue res;
+                                     res.type = VAL_OBJ;
+                                     res.as.obj = bound;
+                                     REG(rd) = res;
+                                 } else {
+                                     THROW_ERROR("TypeMismatchError", "Method is not a function");
+                                 }
+                             } else {
+                                 THROW_ERROR("NameDefineError", "Undefined property/method on Array");
+                             }
+                        } else {
+                            THROW_ERROR("NameDefineError", "Arrays only have 'length' property (Array class not found)");
+                        }
                     }
                 } else {
-                     RUNTIME_ERROR("GETF not supported on this type");
+                     THROW_ERROR("TypeMismatchError", "GETF not supported on this type");
                 }
                 break;
             }
@@ -1387,8 +1619,11 @@ int kvm_run(KVM* vm) {
                 uint8_t rb = READ_REG_IDX(); // Value
                 uint16_t id = READ_IMM16(); // String ID
                 
+                if (REG(ra).type == VAL_NULL) {
+                    THROW_ERROR("NilReferenceError", "PUTF target is nil");
+                }
                 if (REG(ra).type != VAL_OBJ) {
-                    RUNTIME_ERROR("PUTF target must be object");
+                    THROW_ERROR("TypeMismatchError", "PUTF target must be object");
                 }
                 
                 char* key = vm->chunk->string_table[id];
@@ -1398,7 +1633,7 @@ int kvm_run(KVM* vm) {
                     KObjInstance* inst = (KObjInstance*)obj;
                     table_set(&inst->fields, key, REG(rb));
                 } else {
-                    RUNTIME_ERROR("PUTF not supported on this type");
+                    THROW_ERROR("TypeMismatchError", "PUTF not supported on this type");
                 }
                 break;
             }
@@ -1408,12 +1643,7 @@ int kvm_run(KVM* vm) {
                 uint16_t name_id = READ_IMM16();
                 char* name = vm->chunk->string_table[name_id];
                 
-                KObjClass* klass = (KObjClass*)malloc(sizeof(KObjClass));
-                klass->header.type = OBJ_CLASS;
-                klass->header.marked = false;
-                klass->header.next = vm->objects;
-                klass->header.size = sizeof(KObjClass);
-                vm->objects = (KObjHeader*)klass;
+                KObjClass* klass = (KObjClass*)kgc_alloc(vm->gc, sizeof(KObjClass), OBJ_CLASS);
                 
                 klass->name = strdup(name);
                 klass->parent = NULL;
@@ -1515,12 +1745,7 @@ int kvm_run(KVM* vm) {
                 }
                 
                 // Create Bound Method
-                KObjBoundMethod* bound = (KObjBoundMethod*)malloc(sizeof(KObjBoundMethod));
-                bound->header.type = OBJ_BOUND_METHOD;
-                bound->header.marked = false;
-                bound->header.next = vm->objects;
-                bound->header.size = sizeof(KObjBoundMethod);
-                vm->objects = (KObjHeader*)bound;
+                KObjBoundMethod* bound = (KObjBoundMethod*)kgc_alloc(vm->gc, sizeof(KObjBoundMethod), OBJ_BOUND_METHOD);
                 
                 bound->receiver = REG(ra);
                 bound->method = (KObjFunction*)method_val.as.obj;
@@ -1538,7 +1763,8 @@ int kvm_run(KVM* vm) {
                 uint16_t method_id = READ_IMM16();
                 uint8_t arg_count = READ_BYTE();
                 
-                if (REG(ra).type != VAL_OBJ) RUNTIME_ERROR("INVOKE target must be object");
+                if (REG(ra).type == VAL_NULL) THROW_ERROR("NilReferenceError", "INVOKE target is nil");
+                if (REG(ra).type != VAL_OBJ) THROW_ERROR("TypeMismatchError", "INVOKE target must be object");
                 KObj* obj = (KObj*)REG(ra).as.obj;
                 char* method_name = vm->chunk->string_table[method_id];
                 
@@ -1588,6 +1814,15 @@ int kvm_run(KVM* vm) {
                         }
                         curr = curr->parent;
                     }
+                } else if (obj->header.type == OBJ_ARRAY) {
+                    // Array methods
+                    KValue class_val;
+                    if (table_get(&vm->globals, "Array", &class_val) && class_val.type == VAL_OBJ) {
+                        KObjClass* klass = (KObjClass*)class_val.as.obj;
+                        if (table_get(&klass->methods, method_name, &func_val)) {
+                            found = true;
+                        }
+                    }
                 }
                 
                 if (!found) {
@@ -1602,7 +1837,7 @@ int kvm_run(KVM* vm) {
                     KObj* func_obj = (KObj*)func_val.as.obj;
                     if (func_obj->header.type == OBJ_FUNCTION) {
                         int arity = ((KObjFunction*)func_obj)->arity;
-                        if (obj->header.type == OBJ_CLASS_INSTANCE) {
+                        if (obj->header.type == OBJ_CLASS_INSTANCE || obj->header.type == OBJ_ARRAY) {
                              if (arity == arg_count + 1) pass_self = true;
                              else pass_self = false; 
                         } else {
@@ -1610,7 +1845,7 @@ int kvm_run(KVM* vm) {
                         }
                     } else if (func_obj->header.type == OBJ_NATIVE) {
                         // Native method on instance: always pass self
-                        if (obj->header.type == OBJ_CLASS_INSTANCE) {
+                        if (obj->header.type == OBJ_CLASS_INSTANCE || obj->header.type == OBJ_ARRAY) {
                             pass_self = true;
                         }
                     }
@@ -1619,7 +1854,7 @@ int kvm_run(KVM* vm) {
                 // Adjust stack for call
                 if (pass_self) {
                      if (vm->stack_top + 1 - vm->stack >= KVM_STACK_SIZE) {
-                         printf("Stack overflow\n");
+                         printf("Stack overflow in INVOKE (Usage: %d)\n", (int)(vm->stack_top - vm->stack));
                          return false;
                      }
                      vm->stack_top++;
@@ -1700,9 +1935,6 @@ int kvm_run(KVM* vm) {
             case KOP_DEBUG: {
                 uint8_t rd = READ_REG_IDX();
                 READ_BYTE(); READ_BYTE();
-                printf("DEBUG: Reg[%d] = ", rd);
-                kvm_print_value(REG(rd));
-                printf("\n");
                 break;
             }
 
@@ -1716,14 +1948,18 @@ int kvm_run(KVM* vm) {
     return 0;
 }
 
+// Public wrapper for call
+bool kvm_call_function(KVM* vm, KObjFunction* function, int arg_count) {
+    return call(vm, function, arg_count, 0);
+}
+
 int kvm_interpret(KVM* vm, KBytecodeChunk* chunk) {
     vm->chunk = chunk;
     vm->ip = chunk->code;
 
-    /* JIT Disabled
     // Try JIT Compilation
-    if (vm->jit.enabled && !chunk->jit_code) {
-        chunk->jit_code = jit_compile(&vm->jit, chunk);
+    if (vm->jit && vm->jit->enabled && !chunk->jit_code) {
+        chunk->jit_code = jit_compile(vm->jit, chunk);
     }
 
     if (chunk->jit_code) {
@@ -1731,7 +1967,6 @@ int kvm_interpret(KVM* vm, KBytecodeChunk* chunk) {
         int res = func(vm);
         return res;
     }
-    */
 
     return kvm_run(vm);
 }

@@ -1,6 +1,3 @@
-//
-// Created by Helix on 2026/1/21.
-//
 
 #include "keditor.h"
 #include "klex.h"
@@ -28,7 +25,7 @@
     #include <sys/types.h>
 #endif
 
-// --- 定義與常量 ---
+/** @brief 定義與常量 */
 
 #define KEDITOR_VERSION "0.1.0"
 #define KEDITOR_TAB_STOP 4
@@ -49,19 +46,19 @@ enum editorKey {
     PAGE_DOWN
 };
 
-// --- 數據結構 ---
+/** @brief 數據結構 */
 
 typedef struct {
     char* chars;
     int len;
-    int render_len; // 考慮 Tab 等
+    int render_len; /** @brief 考慮 Tab 等 */
 } ERow;
 
 typedef struct {
-    int cx, cy; // 光標在文件中的位置 (x: 列, y: 行)
-    int rx;     // 光標在渲染行的位置 (處理 Tab)
-    int rowoff; // 行滾動偏移
-    int coloff; // 列滾動偏移
+    int cx, cy; /** @brief 光標在文件中的位置 (x: 列, y: 行) */
+    int rx;     /** @brief 光標在渲染行的位置 (處理 Tab) */
+    int rowoff; /** @brief 行滾動偏移 */
+    int coloff; /** @brief 列滾動偏移 */
     int screen_rows;
     int screen_cols;
     
@@ -85,7 +82,7 @@ static DWORD originalConsoleMode;
 static struct termios orig_termios;
 #endif
 
-// --- Append Buffer ---
+/** @brief Append Buffer */
 
 struct abuf {
     char *b;
@@ -106,17 +103,17 @@ void abFree(struct abuf *ab) {
     free(ab->b);
 }
 
-// --- 輔助函數聲明 ---
+/** @brief 輔助函數聲明 */
 void editorSetStatusMessage(const char* fmt, ...);
 void editorRefreshScreen();
 char* editorRowsToString(int* buflen);
 void editorSave();
 void editorRun();
 
-// --- 終端控制 (跨平台) ---
+/** @brief 終端控制 (跨平台) */
 
 void die(const char *s) {
-    // 清屏並退出
+    /** @brief 清屏並退出 */
     write(1, "\x1b[2J", 4);
     write(1, "\x1b[H", 3);
     perror(s);
@@ -138,21 +135,23 @@ void enableRawMode() {
     GetConsoleMode(hConsole, &originalConsoleMode);
     atexit(disableRawMode);
     
-    // Enable ANSI escape codes for Windows 10+
+    /** @brief Enable ANSI escape codes for Windows 10+ */
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD dwMode = 0;
     GetConsoleMode(hOut, &dwMode);
     dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
     SetConsoleMode(hOut, dwMode);
 
-    // Set UTF-8 Output
+    /** @brief Set UTF-8 Output */
     SetConsoleOutputCP(65001);
 
     DWORD mode = originalConsoleMode;
-    // 禁用行緩衝和回顯，但在 Windows 上 _getch() 已經是不緩衝的
-    // 我們主要是為了處理一些特殊鍵
-    // mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
-    // SetConsoleMode(hConsole, mode);
+    /** 
+     * @brief 禁用行緩衝和回顯，但在 Windows 上 _getch() 已經是不緩衝的
+     * 我們主要是為了處理一些特殊鍵
+     */
+    /** mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT); */
+    /** SetConsoleMode(hConsole, mode); */
 #else
     if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) die("tcgetattr");
     atexit(disableRawMode);
@@ -173,7 +172,7 @@ int editorReadKey() {
     int nread;
     char c;
 #ifdef _WIN32
-    // Windows 使用 _getch()
+    /** @brief Windows 使用 _getch() */
     int key = _getch();
     if (key == 0 || key == 224) {
         int seq = _getch();
@@ -192,11 +191,11 @@ int editorReadKey() {
     } else if (key == 8) {
         return BACKSPACE;
     } else if (key == 13) {
-        return '\r'; // Enter
+        return '\r'; /** @brief Enter */
     }
     return key;
 #else
-    // Linux Escape Sequences
+    /** @brief Linux Escape Sequences */
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
         if (nread == -1 && errno != EAGAIN) die("read");
     }
@@ -266,7 +265,7 @@ int getWindowSize(int *rows, int *cols) {
 #endif
 }
 
-// --- 行操作 ---
+/** @brief 行操作 */
 
 void editorInsertRow(int at, char* s, size_t len) {
     if (at < 0 || at > E.numrows) return;
@@ -321,7 +320,7 @@ void editorInsertNewline() {
     } else {
         ERow* row = &E.row[E.cy];
         editorInsertRow(E.cy + 1, &row->chars[E.cx], row->len - E.cx);
-        row = &E.row[E.cy]; // Realloc 可能改變了地址
+        row = &E.row[E.cy]; /** @brief Realloc 可能改變了地址 */
         row->len = E.cx;
         row->chars[row->len] = '\0';
     }
@@ -338,7 +337,7 @@ void editorDelChar() {
         editorRowDelChar(row, E.cx - 1);
         E.cx--;
     } else {
-        // 合並行
+        /** @brief 合並行 */
         E.cx = E.row[E.cy - 1].len;
         ERow* prev = &E.row[E.cy - 1];
         prev->chars = (char*)realloc(prev->chars, prev->len + row->len + 1);
@@ -350,7 +349,7 @@ void editorDelChar() {
     }
 }
 
-// --- 文件 I/O ---
+/** @brief 文件 I/O */
 
 char* editorRowsToString(int* buflen) {
     int totallen = 0;
@@ -380,7 +379,7 @@ void editorOpen(const char* filename) {
     
     char* line = NULL;
     size_t linecap = 0;
-    // 跨平台 getline 需要自己實現或用 fgets
+    /** @brief 跨平台 getline 需要自己實現或用 fgets */
     char buf[1024];
     while (fgets(buf, sizeof(buf), fp)) {
         int len = strlen(buf);
@@ -410,21 +409,21 @@ void editorSave() {
     }
 }
 
-// --- 運行代碼 ---
+/** @brief 運行代碼 */
 
 void editorRun() {
     editorSetStatusMessage("Running...");
     editorRefreshScreen(); 
     
-    // 1. 獲取代碼
+    /** @brief 1. 獲取代碼 */
     int len;
     char* source = editorRowsToString(&len);
     
-    // 2. 準備環境
-    // 退出 raw mode
+    /** @brief 2. 準備環境 */
+    /** @brief 退出 raw mode */
     disableRawMode();
     
-    // 清屏並重置光標
+    /** @brief 清屏並重置光標 */
 #ifdef _WIN32
     system("cls");
 #else
@@ -474,15 +473,17 @@ void editorRun() {
     getchar();
 #endif
     
-    // 恢復 Raw Mode
+    /** @brief 恢復 Raw Mode */
     enableRawMode();
 }
 
-// --- 語法高亮 (ANSI) ---
+/** @brief 語法高亮 (ANSI) */
 
 void editorDrawSyntaxHighlighted(struct abuf *ab, ERow* row, int col_offset, int len) {
-    // 為了簡單起見，我們這裡只做關鍵字高亮
-    // 使用 Lexer 對整行進行處理
+    /** 
+     * @brief 為了簡單起見，我們這裡只做關鍵字高亮
+     * 使用 Lexer 對整行進行處理
+     */
     
     Lexer lexer;
     init_lexer(&lexer, row->chars);
@@ -494,9 +495,9 @@ void editorDrawSyntaxHighlighted(struct abuf *ab, ERow* row, int col_offset, int
         int token_offset = (int)(token.value - row->chars);
         int token_len = token.length;
         
-        // 打印 token 之間的空白/未知字符
+        /** @brief 打印 token 之間的空白/未知字符 */
         if (token_offset > current_idx) {
-            abAppend(ab, "\x1b[39m", 5); // Default color
+            abAppend(ab, "\x1b[39m", 5); /** @brief Default color */
             for (int i = current_idx; i < token_offset; i++) {
                 if (i >= col_offset && i < col_offset + len) abAppend(ab, &row->chars[i], 1);
             }
@@ -523,18 +524,18 @@ void editorDrawSyntaxHighlighted(struct abuf *ab, ERow* row, int col_offset, int
             case KORELIN_TOKEN_PRIVATE:
             case KORELIN_TOKEN_VOID:
             case KORELIN_TOKEN_BOOL:
-                color = "\x1b[34m"; // Blue
+                color = "\x1b[34m"; /** @brief Blue */
                 break;
             case KORELIN_TOKEN_STRING:
-                color = "\x1b[31m"; // Red
+                color = "\x1b[31m"; /** @brief Red */
                 break;
             case KORELIN_TOKEN_INT:
             case KORELIN_TOKEN_FLOAT:
-                color = "\x1b[32m"; // Green
+                color = "\x1b[32m"; /** @brief Green */
                 break;
             case KORELIN_TOKEN_IDENT:
                 if (isupper(token.value[0])) {
-                    color = "\x1b[33m"; // Yellow
+                    color = "\x1b[33m"; /** @brief Yellow */
                 }
                 break;
             default:
@@ -549,7 +550,7 @@ void editorDrawSyntaxHighlighted(struct abuf *ab, ERow* row, int col_offset, int
         
         current_idx = token_offset + token_len;
         
-        // Free token value if dynamic
+        /** @brief Free token value if dynamic */
         if (token.type == KORELIN_TOKEN_IDENT || 
             token.type == KORELIN_TOKEN_STRING || 
             token.type == KORELIN_TOKEN_INT || 
@@ -560,27 +561,27 @@ void editorDrawSyntaxHighlighted(struct abuf *ab, ERow* row, int col_offset, int
         }
     }
     
-    // 剩餘部分 (註釋等)
+    /** @brief 剩餘部分 (註釋等) */
     abAppend(ab, "\x1b[39m", 5);
     for (int i = current_idx; i < row->len; i++) {
          if (i >= col_offset && i < col_offset + len) {
-             // 簡單註釋檢測
+             /** @brief 簡單註釋檢測 */
              if (row->chars[i] == '/' && i+1 < row->len && row->chars[i+1] == '/') {
-                 abAppend(ab, "\x1b[32m", 5); // Green
+                 abAppend(ab, "\x1b[32m", 5); /** @brief Green */
              }
              abAppend(ab, &row->chars[i], 1);
          }
     }
 }
 
-// --- 渲染 ---
+/** @brief 渲染 */
 
 void editorRefreshScreen() {
     struct abuf ab = ABUF_INIT;
     
-    // 隱藏光標
+    /** @brief 隱藏光標 */
     abAppend(&ab, "\x1b[?25l", 6);
-    // 移動到 (1,1)
+    /** @brief 移動到 (1,1) */
     abAppend(&ab, "\x1b[H", 3);
     
     for (int y = 0; y < E.screen_rows; y++) {
@@ -606,17 +607,17 @@ void editorRefreshScreen() {
             
             editorDrawSyntaxHighlighted(&ab, &E.row[filerow], E.coloff, E.screen_cols);
             
-            // 重置顏色
+            /** @brief 重置顏色 */
             abAppend(&ab, "\x1b[39m", 5);
         }
         
-        // 清除行尾
+        /** @brief 清除行尾 */
         abAppend(&ab, "\x1b[K", 3);
         abAppend(&ab, "\r\n", 2);
     }
     
-    // 狀態欄
-    abAppend(&ab, "\x1b[7m", 4); // 反色
+    /** @brief 狀態欄 */
+    abAppend(&ab, "\x1b[7m", 4); /** @brief 反色 */
     char status[80], rstatus[80];
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
         E.filename ? E.filename : "[No Name]", E.numrows,
@@ -633,22 +634,22 @@ void editorRefreshScreen() {
             len++;
         }
     }
-    abAppend(&ab, "\x1b[m", 3); // 恢復正常
+    abAppend(&ab, "\x1b[m", 3); /** @brief 恢復正常 */
     abAppend(&ab, "\r\n", 2);
     
-    // 消息欄
+    /** @brief 消息欄 */
     abAppend(&ab, "\x1b[K", 3);
     int msglen = strlen(E.statusmsg);
     if (msglen > E.screen_cols) msglen = E.screen_cols;
     if (msglen && time(NULL) - E.statusmsg_time < 5)
         abAppend(&ab, E.statusmsg, msglen);
         
-    // 恢復光標
+    /** @brief 恢復光標 */
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.cx - E.coloff) + 1);
     abAppend(&ab, buf, strlen(buf));
     
-    // 顯示光標
+    /** @brief 顯示光標 */
     abAppend(&ab, "\x1b[?25h", 6);
     
     write(1, ab.b, ab.len);
@@ -663,7 +664,7 @@ void editorSetStatusMessage(const char* fmt, ...) {
     E.statusmsg_time = time(NULL);
 }
 
-// --- 輸入處理 ---
+/** @brief 輸入處理 */
 
 void editorProcessKeypress() {
     int c = editorReadKey();
@@ -706,7 +707,7 @@ void editorProcessKeypress() {
         case CTRL_KEY('h'):
         case DEL_KEY:
             if (c == DEL_KEY) {
-                // TODO: Delete key
+                /** @brief TODO: Delete key */
             } else {
                 editorDelChar();
             }
@@ -768,11 +769,11 @@ void editorProcessKeypress() {
     
     E.quit_times = KEDITOR_QUIT_TIMES;
     
-    // 修正光標位置
+    /** @brief 修正光標位置 */
     if (E.cy >= E.numrows) E.cx = 0; 
     else if (E.cx > E.row[E.cy].len) E.cx = E.row[E.cy].len;
     
-    // 滾動處理
+    /** @brief 滾動處理 */
     if (E.cy < E.rowoff) {
         E.rowoff = E.cy;
     }
@@ -787,7 +788,7 @@ void editorProcessKeypress() {
     }
 }
 
-// --- 初始化 ---
+/** @brief 初始化 */
 
 void initEditor() {
     E.cx = 0;

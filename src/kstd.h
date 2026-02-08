@@ -5,8 +5,10 @@
 extern "C" {
 #endif
 
-// 初始化標準庫
-// 註冊所有內置模塊 (os, math, time 等)
+/**
+ * @brief 初始化標準庫
+ * 註冊所有內置模塊 (os, math, time 等)
+ */
 void kstd_register();
 
 #ifdef __cplusplus

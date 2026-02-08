@@ -1,13 +1,12 @@
-//
-// Created by Helix on 2026/1/21.
-//
 #include "kcode.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "kconst.h" 
 
-// --- Internal Structures ---
+/**
+ * @brief 內部結構定義
+ */
 
 typedef struct {
     char* name;
@@ -37,14 +36,18 @@ typedef struct {
     int loop_depth;
 } CompilerState;
 
-// --- Forward Declarations ---
+/**
+ * @brief 前向聲明
+ */
 
 static void compile_statement(CompilerState* compiler, KastStatement* stmt);
 static void compile_expression(CompilerState* compiler, KastExpression* expr, int target_reg);
 static int add_string_constant(CompilerState* compiler, const char* str);
 static void patch_jump(CompilerState* compiler, int offset, int target);
 
-// --- Chunk Management ---
+/**
+ * @brief 字節碼塊管理
+ */
 
 void init_chunk(KBytecodeChunk* chunk) {
     chunk->count = 0;
@@ -387,6 +390,8 @@ static void compile_expression(CompilerState* compiler, KastExpression* expr, in
                 case KORELIN_TOKEN_LE: op = KOP_LE; break;
                 case KORELIN_TOKEN_GT: op = KOP_GT; break;
                 case KORELIN_TOKEN_GE: op = KOP_GE; break;
+                case KORELIN_TOKEN_AND: op = KOP_AND; break;
+                case KORELIN_TOKEN_OR: op = KOP_OR; break;
                 default: break;
             }
             
@@ -1307,8 +1312,22 @@ static void compile_statement(CompilerState* compiler, KastStatement* stmt) {
         }
         case KAST_NODE_BLOCK: {
             KastBlock* block = (KastBlock*)stmt;
+            compiler->scope_depth++; // Enter scope
             for (size_t i = 0; i < block->statement_count; i++) {
                 compile_statement(compiler, block->statements[i]);
+            }
+            compiler->scope_depth--; // Exit scope
+            
+            // Pop locals defined in this scope
+            while (compiler->local_count > 0 && 
+                   compiler->locals[compiler->local_count - 1].depth > compiler->scope_depth) {
+                // For register-based VM, we effectively free the register by decrementing count
+                // provided the local was at the top.
+                // In this simple register allocator, locals are allocated sequentially.
+                // So popping the last local frees the last register.
+                compiler->current_reg_count--;
+                free(compiler->locals[compiler->local_count - 1].name);
+                compiler->local_count--;
             }
             break;
         }

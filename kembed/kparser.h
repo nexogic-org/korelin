@@ -60,6 +60,7 @@ typedef enum {
     KAST_NODE_SCOPE_ACCESS, // 作用域访问 (::)
     KAST_NODE_CALL,         // 函数/方法调用
     KAST_NODE_ARRAY_ACCESS, // 数组访问 (arr[index])
+    KAST_NODE_ARRAY_LITERAL, // 数组字面量 [1, 2, 3]
 
     // 表达式扩展
     KAST_NODE_BINARY_OP,    // 二元操作符 (&&, ||, ==, <, +, -, etc.)
@@ -337,6 +338,14 @@ typedef struct {
     KastNode* array; // 数组表达式
     KastNode* index; // 索引表达式
 } KastArrayAccess;
+
+// 数组字面量节点
+// 对应语法: [ expr, ... ]
+typedef struct {
+    KastNode base;
+    KastNode** elements;
+    size_t element_count;
+} KastArrayLiteral;
 
 // 变量/常量声明节点
 // 对应语法: (var|let) [const] [type] ident [= expr]

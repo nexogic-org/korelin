@@ -10,8 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-// --- 全局狀態 ---
-// Use Thread Local Storage for VM instance to support multi-threading
+/**
+ * @brief 全局狀態
+ */
+// 使用線程局部存儲 (TLS) 保存 VM 實例以支持多線程
 #if defined(_MSC_VER)
 __declspec(thread) KVM* g_current_vm = NULL;
 #else
@@ -22,7 +24,9 @@ static KVM g_internal_vm; // Only used if KInit/KRun manages lifecycle (Main thr
 static bool g_initialized = false;
 
 
-// --- 內部輔助 ---
+/**
+ * @brief 內部輔助
+ */
 
 void KBindVM(KVM* vm) {
     g_current_vm = vm;
@@ -39,7 +43,9 @@ static void ensure_init() {
     }
 }
 
-// 註冊本地函數到 VM 全局變量
+/**
+ * @brief 註冊本地函數到 VM 全局變量
+ */
 static void register_native(const char* name, void* func) {
     if (!g_current_vm) return;
     
@@ -80,7 +86,9 @@ static void register_native(const char* name, void* func) {
     // Using KObjInstance of an empty class is easiest.
 }
 
-// --- API 實現 ---
+/**
+ * @brief API 實現
+ */
 
 void KInit() {
     // ensure_init(); 

@@ -61,7 +61,6 @@ cmake ..
 cmake --build .
 ```
 
-
 ## License
 
 MIT License

@@ -1,7 +1,3 @@
-//
-// Created by Helix on 2026/1/10.
-//
-
 #include "kgc.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -14,7 +10,9 @@
 #define GC_HEAP_GROW_FACTOR 2
 #define GC_INITIAL_THRESHOLD (1024 * 1024) // 1MB
 
-// --- 內部輔助函數聲明 ---
+/**
+ * @brief 內部輔助函數聲明
+ */
 static void mark_roots(KGC* gc);
 static void sweep(KGC* gc);
 static void blacken_object(KGC* gc, KObjHeader* obj);
@@ -28,8 +26,8 @@ void kgc_init(KGC* gc, KVM* vm) {
     gc->vm = vm;
     gc->gc_count = 0;
 #ifdef _WIN32
-    // Create a private heap. 
-    // Options: 0 (defaults), InitialSize=0, MaximumSize=0 (growable)
+    // 創建私有堆
+    // 選項: 0 (默認), InitialSize=0, MaximumSize=0 (可增長)
     gc->heap_handle = HeapCreate(0, 0, 0);
     if (gc->heap_handle == NULL) {
         fprintf(stderr, "[KGC] Failed to create Windows Heap! Error: %lu\n", GetLastError());

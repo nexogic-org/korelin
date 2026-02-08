@@ -3,15 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-// -----------------------------------------------------------------------------
 // 輔助函數聲明
-// -----------------------------------------------------------------------------
 
 /**
- * @brief 将词法分析器的读取指针向前移动一位
+ * @brief 將詞法分析器的讀取指針向前移動一位
  * 
- * @param lexer 指向词法分析器实例的指针
+ * @param lexer 指向詞法分析器實例的指針
  */
 static void advance(Lexer* lexer) {
     if (lexer->current_char == '\n') {
@@ -30,10 +27,10 @@ static void advance(Lexer* lexer) {
 }
 
 /**
- * @brief 查看下一个字符，但不移动指针（向前瞻看）
+ * @brief 查看下一個字符，但不移動指針（向前瞻看）
  * 
- * @param lexer 指向词法分析器实例的指针
- * @return char 下一个字符，如果到达末尾则返回 '\0'
+ * @param lexer 指向詞法分析器實例的指針
+ * @return char 下一個字符，如果到達末尾則返回 '\0'
  */
 static char peek(const Lexer* lexer) {
     if (lexer->read_position >= strlen(lexer->input)) {
@@ -43,9 +40,9 @@ static char peek(const Lexer* lexer) {
 }
 
 /**
- * @brief 跳过所有空白字符（空格、制表符、换行符、回车符）
+ * @brief 跳過所有空白字符（空格、制表符、換行符、回車符）
  * 
- * @param lexer 指向词法分析器实例的指针
+ * @param lexer 指向詞法分析器實例的指針
  */
 static void skip_whitespace(Lexer* lexer) {
     while (lexer->current_char == ' ' || lexer->current_char == '\t' ||
@@ -55,10 +52,10 @@ static void skip_whitespace(Lexer* lexer) {
 }
 
 /**
- * @brief 读取一个完整的标识符或关键字
+ * @brief 讀取一個完整的標識符或關鍵字
  * 
- * @param lexer 指向词法分析器实例的指针
- * @return Token 解析出的标识符 Token
+ * @param lexer 指向詞法分析器實例的指針
+ * @return Token 解析出的標識符 Token
  */
 static Token read_identifier(Lexer* lexer) {
     size_t start_pos = lexer->position;
@@ -89,10 +86,10 @@ static Token read_identifier(Lexer* lexer) {
 }
 
 /**
- * @brief 读取一个完整的数字（支持整数和浮点数）
+ * @brief 讀取一個完整的數字（支持整數和浮點數）
  * 
- * @param lexer 指向词法分析器实例的指针
- * @return Token 解析出的数字 Token
+ * @param lexer 指向詞法分析器實例的指針
+ * @return Token 解析出的數字 Token
  */
 static Token read_number(Lexer* lexer) {
     size_t start_pos = lexer->position;
