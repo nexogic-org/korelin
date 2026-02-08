@@ -74,3 +74,7 @@ cmake --build .
 ## License
 
 MIT License
+
+## Sponsor
+
+If you like Korelin, please support us on Afdian: [https://afdian.com/a/nexogic](https://afdian.com/a/nexogic)

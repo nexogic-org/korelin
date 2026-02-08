@@ -74,3 +74,7 @@ cmake --build .
 ## 許可證
 
 MIT License
+
+## 贊助
+
+如果您喜歡 Korelin，歡迎在愛發電贊助我們：[https://afdian.com/a/nexogic](https://afdian.com/a/nexogic)
