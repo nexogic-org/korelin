@@ -61,6 +61,16 @@ cmake ..
 cmake --build .
 ```
 
+## Version 1.0.4 Update
+
+*   **Multi-parameter Support**: `dynlib.call` now supports passing multiple parameters (up to 16), resolving the issue where only 1 parameter could be passed in previous versions.
+*   **Code Optimization**: Unified code comment style to Traditional Chinese Javadoc format.
+*   **Bug Fixes**:
+    *   **Thread Isolation**: Fixed the issue where child threads could not access global variables of the main thread. Global variables are now shared via a snapshot mechanism (read-only copy).
+    *   **Module Import**: Fixed a crash caused by importing modules in specific paths, adding path length checks and object validation.
+    *   **Logical Operations**: Fixed the issue where `&&`, `||`, and `!` operators did not support boolean values, and fixed related type error crashes.
+    *   **Variable Scope**: Fixed the issue where variable declarations in `if`/`while` blocks were hoisted, polluting external variables.
+
 ## License
 
 MIT License
